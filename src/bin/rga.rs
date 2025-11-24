@@ -59,8 +59,7 @@ fn list_adapters(args: RgaConfig) -> Result<()> {
 fn main() -> anyhow::Result<()> {
     // set debugging as early as possible
     if std::env::args().any(|e| e == "--debug") {
-        // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var("RUST_LOG", "debug") };
+        std::env::set_var("RUST_LOG", "debug");
     }
 
     env_logger::init();
@@ -115,7 +114,7 @@ fn main() -> anyhow::Result<()> {
         "--smart-case",
     ];
 
-    let exe = std::env::current_exe().expect("Could not get executable location");
+    let exe = std::env::current_exe().context("Could not get executable location")?;
     let preproc_exe = exe.with_file_name("rga-preproc");
 
     let before = Instant::now();
@@ -143,7 +142,7 @@ fn main() -> anyhow::Result<()> {
 /// add the directory that contains `rga` to PATH, so rga-preproc can find pandoc etc (if we are on Windows where we include dependent binaries)
 fn add_exe_to_path() -> Result<()> {
     use std::env;
-    let mut exe = env::current_exe().expect("Could not get executable location");
+    let mut exe = env::current_exe().context("Could not get executable location")?;
     // let preproc_exe = exe.with_file_name("rga-preproc");
     exe.pop(); // dirname
 
@@ -154,7 +153,6 @@ fn add_exe_to_path() -> Result<()> {
     // may be somewhat of a security issue if rga binary is in installed in unprivileged locations
     let paths = [&[exe.to_owned(), exe.join("lib")], &paths[..]].concat();
     let new_path = env::join_paths(paths)?;
-    // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { env::set_var("PATH", new_path) };
+    env::set_var("PATH", new_path);
     Ok(())
 }
