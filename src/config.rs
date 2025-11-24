@@ -194,6 +194,28 @@ pub struct RgaConfig {
     #[serde(skip)] // CLI only
     #[structopt(long, help = "Show version of ripgrep itself")]
     pub rg_version: bool,
+
+    /// Override file extensions for the built-in ZIP adapter.
+    ///
+    /// If set, replaces the default list ["zip","jar","xpi","kra","snagx"].
+    #[serde(default)]
+    #[structopt(
+        long = "--rga-zip-extensions",
+        require_equals = true,
+        require_delimiter = true
+    )]
+    pub zip_extensions: Option<Vec<String>>,
+
+    /// Override file extensions for the built-in FFmpeg adapter.
+    ///
+    /// If set, replaces the default list ["mkv","mp4","avi","mp3","ogg","flac","webm"].
+    #[serde(default)]
+    #[structopt(
+        long = "--rga-ffmpeg-extensions",
+        require_equals = true,
+        require_delimiter = true
+    )]
+    pub ffmpeg_extensions: Option<Vec<String>>,
 }
 
 #[derive(StructOpt, Debug, Deserialize, Serialize, JsonSchema, Default, Clone, PartialEq)]

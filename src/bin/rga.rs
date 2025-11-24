@@ -89,7 +89,7 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let adapters = get_adapters_filtered(config.custom_adapters.clone(), &config.adapters)?;
+    let adapters = get_adapters_filtered(config.custom_adapters.clone(), &config.adapters, &config)?;
     log::info!("enabled adapters: {}", adapters.iter().map(|a| a.metadata().name.clone()).collect::<Vec<_>>().join(", "));
 
     let pre_glob = if !config.accurate {
