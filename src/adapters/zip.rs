@@ -82,10 +82,11 @@ impl FileAdapter for ZipAdapter {
                     tokio::pin!(reader);
                     let mut buf = Vec::with_capacity(file.uncompressed_size() as usize);
                     reader.read_to_end(&mut buf).await?;
+                    let s = async_stream::stream! { yield std::io::Result::Ok(bytes::Bytes::from(buf)); };
                     yield Ok(AdaptInfo {
                         filepath_hint: fname,
                         is_real_file: false,
-                        inp: Box::pin(SyncIoBridge::new(std::io::Cursor::new(buf))),
+                        inp: Box::pin(tokio_util::io::StreamReader::new(s)),
                         line_prefix: new_line_prefix,
                         archive_recursion_depth: archive_recursion_depth + 1,
                         postprocess,
@@ -123,10 +124,11 @@ impl FileAdapter for ZipAdapter {
                         tokio::pin!(reader);
                         let mut buf = Vec::with_capacity(file.uncompressed_size() as usize);
                         reader.read_to_end(&mut buf).await?;
+                        let s = async_stream::stream! { yield std::io::Result::Ok(bytes::Bytes::from(buf)); };
                         yield Ok(AdaptInfo {
                             filepath_hint: fname,
                             is_real_file: false,
-                            inp: Box::pin(SyncIoBridge::new(std::io::Cursor::new(buf))),
+                            inp: Box::pin(tokio_util::io::StreamReader::new(s)),
                             line_prefix: new_line_prefix,
                             archive_recursion_depth: archive_recursion_depth + 1,
                             postprocess,

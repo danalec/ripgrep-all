@@ -127,6 +127,7 @@ fn main() -> anyhow::Result<()> {
         .arg("--pre-glob")
         .arg(pre_glob)
         .args(passthrough_args)
+        .env("RGA_CONFIG", serde_json::to_string(&config).unwrap_or_else(|_| String::new()))
         .stderr(std::process::Stdio::piped());
     log::debug!("rg command to run: {:?}", cmd);
     let mut child = cmd

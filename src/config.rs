@@ -390,8 +390,7 @@ where
                 serde_json::to_string_pretty(&args_config)?,
                 serde_json::to_string_pretty(&merged_config)?
             );
-            // pass to child processes
-            std::env::set_var(RGA_CONFIG, merged_config.to_string());
+            // pass to child processes via rga.rs command env; avoid global env mutation here
             merged_config
         }
     };
