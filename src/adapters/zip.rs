@@ -4,6 +4,8 @@ use anyhow::*;
 use async_stream::stream;
 use lazy_static::lazy_static;
 use log::*;
+use tokio::io::AsyncReadExt;
+use tokio_util::io::SyncIoBridge;
 
 // TODO: allow users to configure file extensions instead of hard coding the list
 // https://github.com/phiresky/ripgrep-all/pull/208#issuecomment-2173241243
@@ -78,19 +80,12 @@ impl FileAdapter for ZipAdapter {
                     let new_line_prefix = format!("{}{}: ", line_prefix, file.filename());
                     let fname = PathBuf::from(file.filename());
                     tokio::pin!(reader);
-                    // SAFETY: this should be solvable without unsafe but idk how :(
-                    // the issue is that ZipEntryReader borrows from ZipFileReader, but we need to yield it here into the stream
-                    // but then it can't borrow from the ZipFile
-                    let reader2 = unsafe {
-                        std::mem::transmute::<
-                            Pin<&mut (dyn AsyncRead + Send)>,
-                            Pin<&'static mut (dyn AsyncRead + Send)>,
-                        >(reader)
-                    };
+                    let mut buf = Vec::with_capacity(file.uncompressed_size() as usize);
+                    reader.read_to_end(&mut buf).await?;
                     yield Ok(AdaptInfo {
                         filepath_hint: fname,
                         is_real_file: false,
-                        inp: Box::pin(reader2),
+                        inp: Box::pin(SyncIoBridge::new(std::io::Cursor::new(buf))),
                         line_prefix: new_line_prefix,
                         archive_recursion_depth: archive_recursion_depth + 1,
                         postprocess,
@@ -126,19 +121,12 @@ impl FileAdapter for ZipAdapter {
                         let fname = PathBuf::from(file.filename());
                         let reader = entry.reader();
                         tokio::pin!(reader);
-                        // SAFETY: this should be solvable without unsafe but idk how :(
-                        // the issue is that ZipEntryReader borrows from ZipFileReader, but we need to yield it here into the stream
-                        // but then it can't borrow from the ZipFile
-                        let reader2 = unsafe {
-                            std::mem::transmute::<
-                                Pin<&mut (dyn AsyncRead + Send)>,
-                                Pin<&'static mut (dyn AsyncRead + Send)>,
-                            >(reader)
-                        };
+                        let mut buf = Vec::with_capacity(file.uncompressed_size() as usize);
+                        reader.read_to_end(&mut buf).await?;
                         yield Ok(AdaptInfo {
                             filepath_hint: fname,
                             is_real_file: false,
-                            inp: Box::pin(reader2),
+                            inp: Box::pin(SyncIoBridge::new(std::io::Cursor::new(buf))),
                             line_prefix: new_line_prefix,
                             archive_recursion_depth: archive_recursion_depth + 1,
                             postprocess,
