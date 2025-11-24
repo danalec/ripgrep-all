@@ -59,10 +59,12 @@ fn list_adapters(args: RgaConfig) -> Result<()> {
 fn main() -> anyhow::Result<()> {
     // set debugging as early as possible
     if std::env::args().any(|e| e == "--debug") {
-        std::env::set_var("RUST_LOG", "debug");
+        env_logger::Builder::from_default_env()
+            .filter_level(log::LevelFilter::Debug)
+            .init();
+    } else {
+        env_logger::init();
     }
-
-    env_logger::init();
 
     let (config, mut passthrough_args) = split_args(false)?;
 
@@ -73,7 +75,7 @@ fn main() -> anyhow::Result<()> {
     if config.list_adapters {
         return list_adapters(config);
     }
-    if let Some(path) = config.fzf_path {
+    if let Some(ref path) = config.fzf_path {
         if path == "_" {
             // fzf found no result, ignore everything and return
             println!("[no file found]");
@@ -107,7 +109,7 @@ fn main() -> anyhow::Result<()> {
     };
     log::info!("pre-glob: {}", pre_glob);
 
-    add_exe_to_path()?;
+    let new_path = compute_exe_path()?;
 
     let rg_args = vec![
         "--no-line-number",
@@ -128,6 +130,7 @@ fn main() -> anyhow::Result<()> {
         .arg(pre_glob)
         .args(passthrough_args)
         .env("RGA_CONFIG", serde_json::to_string(&config).unwrap_or_else(|_| String::new()))
+        .env("PATH", new_path)
         .stderr(std::process::Stdio::piped());
     log::debug!("rg command to run: {:?}", cmd);
     let mut child = cmd
@@ -152,7 +155,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// add the directory that contains `rga` to PATH, so rga-preproc can find pandoc etc (if we are on Windows where we include dependent binaries)
-fn add_exe_to_path() -> Result<()> {
+fn compute_exe_path() -> Result<std::ffi::OsString> {
     use std::env;
     let mut exe = env::current_exe().context("Could not get executable location")?;
     // let preproc_exe = exe.with_file_name("rga-preproc");
@@ -165,6 +168,5 @@ fn add_exe_to_path() -> Result<()> {
     // may be somewhat of a security issue if rga binary is in installed in unprivileged locations
     let paths = [&[exe.to_owned(), exe.join("lib")], &paths[..]].concat();
     let new_path = env::join_paths(paths)?;
-    env::set_var("PATH", new_path);
-    Ok(())
+    Ok(new_path)
 }
