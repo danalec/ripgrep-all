@@ -5,7 +5,7 @@ use async_stream::stream;
 use lazy_static::lazy_static;
 use log::*;
 use tokio::io::AsyncReadExt;
-use tokio_util::io::SyncIoBridge;
+// use tokio_util::io::SyncIoBridge;
 
 // TODO: allow users to configure file extensions instead of hard coding the list
 // https://github.com/phiresky/ripgrep-all/pull/208#issuecomment-2173241243
