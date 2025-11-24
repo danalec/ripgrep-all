@@ -23,7 +23,7 @@ anyhow = {version = "1.0", features = ["backtrace"]}
 async-compression = { version = "0.4.0", features = ["all", "all-algorithms", "tokio"] }
 async-stream = "0.3.5"
 async-trait = "0.1.68"
-async_zip = {version = "0.0.17", features = ["full"]}
+async_zip = {version = "0.0.12", features = ["full"]}
 bincode = "1.3.3"
 bytes = "1.4.0"
 crossbeam = "0.8.2"
@@ -56,6 +56,7 @@ structopt = "0.3.26"
 tempfile = "3.5.0"
 tokio = {version = "1.28.1", features = ["full"]}
 tokio-rusqlite = "0.5.0"
+tokio-stream = {version = "0.1", features = ["io-util", "tokio-util"]}
 astral-tokio-tar =  "0.5.6" 
 tokio-util = {version = "0.7.8", features = ["io", "full"]}
 tree_magic = {package = "tree_magic_mini", version = "3.0.3"}
