@@ -32,7 +32,7 @@ lazy_static! {
         disabled_by_default: true,
         keep_fast_matchers_if_accurate: true
     };
-    static ref FROM_REGEX: Regex = Regex::new("\r?\nFrom [^\n]+\n").unwrap();
+    static ref FROM_REGEX: Result<Regex> = Regex::new("\r?\nFrom [^\n]+\n");
 }
 #[derive(Default)]
 pub struct MboxAdapter;
@@ -70,7 +70,8 @@ impl FileAdapter for MboxAdapter {
             inp.read_to_end(&mut content).await?;
 
             let mut ais = vec![];
-            for mail_bytes in FROM_REGEX.splitn(&content, usize::MAX) {
+            let from_re = FROM_REGEX.as_ref().map_err(|e| anyhow::anyhow!(e))?;
+            for mail_bytes in from_re.splitn(&content, usize::MAX) {
                 let mail_content_opt = mail_bytes.splitn(2, |x| *x == b'\n').nth(1);
                 let Some(mail_content) = mail_content_opt else { continue; };
                 let Ok(mail) = mailparse::parse_mail(mail_content) else { continue; };
