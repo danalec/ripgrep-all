@@ -105,7 +105,10 @@ impl FileAdapter for ZipAdapter {
                     while let Some(mut entry) = zip.next_entry().await? {
                         trace!("zip next entry");
                         let file = entry.entry();
-                        if file.filename().ends_with('/') {
+                        let filename = file.filename().to_string();
+                        let uncompressed = file.uncompressed_size();
+                        let compressed = file.compressed_size();
+                        if filename.ends_with('/') {
                             zip = entry.skip().await?;
 
                             continue;
@@ -114,15 +117,15 @@ impl FileAdapter for ZipAdapter {
                             "{}{}|{}: {} ({} packed)",
                             line_prefix,
                             filepath_hint.display(),
-                            file.filename(),
-                            print_bytes(file.uncompressed_size() as f64),
-                            print_bytes(file.compressed_size() as f64)
+                            filename,
+                            print_bytes(uncompressed as f64),
+                            print_bytes(compressed as f64)
                         );
-                        let new_line_prefix = format!("{}{}: ", line_prefix, file.filename());
-                        let fname = PathBuf::from(file.filename());
+                        let new_line_prefix = format!("{}{}: ", line_prefix, filename);
+                        let fname = PathBuf::from(&filename);
                         let reader = entry.reader();
                         tokio::pin!(reader);
-                        let mut buf = Vec::with_capacity(file.uncompressed_size() as usize);
+                        let mut buf = Vec::with_capacity(uncompressed as usize);
                         reader.read_to_end(&mut buf).await?;
                         let s = async_stream::stream! { yield std::io::Result::Ok(bytes::Bytes::from(buf)); };
                         yield Ok(AdaptInfo {
