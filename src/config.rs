@@ -8,6 +8,7 @@ use std::ffi::OsString;
 use std::io::Read;
 use std::{fs::File, io::Write, iter::IntoIterator, path::PathBuf, str::FromStr};
 use structopt::StructOpt;
+use once_cell::sync::OnceCell;
 
 fn is_default<T: Default + PartialEq>(t: &T) -> bool {
     t == &T::default()
@@ -275,6 +276,7 @@ pub struct CacheConfig {
 }
 
 static RGA_CONFIG: &str = "RGA_CONFIG";
+static PREPROC_ENV_CONFIG: OnceCell<serde_json::Value> = OnceCell::new();
 
 use serde_json::Value;
 fn json_merge(a: &mut Value, b: &Value) {
@@ -345,6 +347,15 @@ fn read_config_env() -> Result<Value> {
         serde_json::to_value(RgaConfig::default()).context("could not create default config")
     }
 }
+fn read_config_env_cached() -> Result<Value> {
+    if let Some(v) = PREPROC_ENV_CONFIG.get() {
+        Ok(v.clone())
+    } else {
+        let v = read_config_env()?;
+        let _ = PREPROC_ENV_CONFIG.set(v.clone());
+        Ok(v)
+    }
+}
 pub fn parse_args<I>(args: I, is_rga_preproc: bool) -> Result<RgaConfig>
 where
     I: IntoIterator,
@@ -358,7 +369,7 @@ where
     let merged_config = {
         if is_rga_preproc {
             // only read from env and args
-            let mut merged_config = read_config_env()?;
+            let mut merged_config = read_config_env_cached()?;
             json_merge(&mut merged_config, &args_config);
             log::debug!("Config: {}", serde_json::to_string(&merged_config)?);
             merged_config

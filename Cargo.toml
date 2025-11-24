@@ -57,10 +57,11 @@ structopt = "0.3.26"
 tempfile = "3.5.0"
 tokio = {version = "1.28.1", features = ["full"]}
 tokio-rusqlite = "0.5.0"
-tokio-stream = {version = "0.1.14", features = ["io-util", "tokio-util"]}
+tokio-util = {version = "0.7.8", features = ["io", "full"]}
 astral-tokio-tar =  "0.5.6" 
 tokio-util = {version = "0.7.8", features = ["io", "full"]}
 tree_magic = {package = "tree_magic_mini", version = "3.0.3"}
+once_cell = "1.19.0"
 
 [dev-dependencies]
 async-recursion = "1.0.4"
