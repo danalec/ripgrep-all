@@ -216,6 +216,18 @@ pub struct RgaConfig {
         value_delimiter = ','
     )]
     pub ffmpeg_extensions: Option<Vec<String>>,
+
+    #[serde(default)]
+    #[clap(long = "--rga-postproc-binary-marker", require_equals = true)]
+    pub postproc_binary_marker: Option<String>,
+
+    #[serde(default)]
+    #[clap(long = "--rga-postproc-page-prefix", require_equals = true)]
+    pub postproc_page_prefix: Option<String>,
+
+    #[serde(default)]
+    #[clap(long = "--rga-postproc-page-include-empty")] 
+    pub postproc_page_include_empty: Option<bool>,
 }
 
 #[derive(Parser, Debug, Deserialize, Serialize, JsonSchema, Default, Clone, PartialEq)]

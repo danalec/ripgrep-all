@@ -52,9 +52,10 @@ impl FileAdapter for PostprocPrefix {
         a: super::AdaptInfo,
         _detection_reason: &crate::matching::FileMatcher,
     ) -> Result<AdaptedFilesIterBox> {
+        let marker = a.config.postproc_binary_marker.clone().unwrap_or("[rga: binary data]".to_string());
         let read = add_newline(postproc_prefix(
             &a.line_prefix,
-            postproc_encoding(&a.line_prefix, a.inp).await?,
+            postproc_encoding(&a.line_prefix, a.inp, &marker).await?,
         ));
         // keep adapt info (filename etc) except replace inp
         let ai = AdaptInfo {
@@ -82,6 +83,7 @@ impl Read for ReadErr {
 async fn postproc_encoding(
     _line_prefix: &str,
     inp: Pin<Box<dyn AsyncRead + Send>>,
+    binary_marker: &str,
 ) -> Result<Pin<Box<dyn AsyncRead + Send>>> {
     // check for binary content in first 8kB
     // read the first 8kB into a buffer, check for null bytes, then return the buffer concatenated with the rest of the file
@@ -121,7 +123,7 @@ async fn postproc_encoding(
         _ => {
             if has_binary {
                 log::debug!("detected binary");
-                return Ok(Box::pin(Cursor::new("[rga: binary data]")));
+                return Ok(Box::pin(Cursor::new(binary_marker.to_string())));
             }
             Ok(Box::pin(inp))
         }
@@ -184,7 +186,10 @@ impl FileAdapter for PostprocPageBreaks {
         a: super::AdaptInfo,
         _detection_reason: &crate::matching::FileMatcher,
     ) -> Result<AdaptedFilesIterBox> {
-        let read = postproc_pagebreaks(postproc_encoding(&a.line_prefix, a.inp).await?);
+        let marker = a.config.postproc_binary_marker.clone().unwrap_or("[rga: binary data]".to_string());
+        let prefix = a.config.postproc_page_prefix.clone().unwrap_or("Page ".to_string());
+        let include_empty = a.config.postproc_page_include_empty.unwrap_or(true);
+        let read = postproc_pagebreaks(postproc_encoding(&a.line_prefix, a.inp, &marker).await?, &prefix, include_empty);
         // keep adapt info (filename etc) except replace inp
         let ai = AdaptInfo {
             inp: Box::pin(read),
@@ -203,16 +208,16 @@ impl FileAdapter for PostprocPageBreaks {
 /// Adds the prefix "Page N: " to each line,
 /// where N starts at one and is incremented for each ASCII Form Feed character in the input stream.
 /// ASCII form feeds are the page delimiters output by `pdftotext`.
-pub fn postproc_pagebreaks(input: impl AsyncRead + Send) -> impl AsyncRead + Send {
+pub fn postproc_pagebreaks(input: impl AsyncRead + Send, prefix: &str, include_empty: bool) -> impl AsyncRead + Send {
     let regex_linefeed = regex::bytes::Regex::new(r"\x0c").unwrap();
     let regex_newline = regex::bytes::Regex::new("\n").unwrap();
     let regex_crlf = regex::bytes::Regex::new("\r\n").unwrap();
     let mut page_count: i32 = 1;
-    let mut page_prefix: String = format!("\nPage {page_count}: ");
+    let mut page_prefix: String = format!("\n{prefix}{page_count}: ");
 
     let input_stream = ReaderStream::new(input);
     let output_stream = stream! {
-        yield std::io::Result::Ok(Bytes::copy_from_slice(format!("Page {page_count}: ").as_bytes()));
+        yield std::io::Result::Ok(Bytes::copy_from_slice(format!("{prefix}{page_count}: ").as_bytes()));
         // store Page X: line prefixes in pending and only write it to the output when there is more text to be written
         // this is needed since pdftotext outputs a \x0c at the end of the last page
         let mut pending: Option<Bytes> = None;
@@ -224,13 +229,13 @@ pub fn postproc_pagebreaks(input: impl AsyncRead + Send) -> impl AsyncRead + Sen
             for (chunk_idx, page_chunk) in page_chunks.enumerate() {
                 if chunk_idx != 0 {
                     page_count += 1;
-                    page_prefix = format!("\nPage {page_count}: ");
+                    page_prefix = format!("\n{prefix}{page_count}: ");
                     if let Some(p) = pending.take() {
                         yield Ok(p);
                     }
                     pending = Some(Bytes::copy_from_slice(page_prefix.as_bytes()));
                 }
-                if !page_chunk.is_empty() {
+                if !page_chunk.is_empty() || include_empty {
                     if let Some(p) = pending.take() {
                         yield Ok(p);
                     }
