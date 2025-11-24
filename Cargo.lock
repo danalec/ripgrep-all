@@ -1453,6 +1453,7 @@ dependencies = [
  "mailparse",
  "memchr",
  "mime2ext",
+ "once_cell",
  "open",
  "paste",
  "path-clean",
@@ -1468,7 +1469,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rusqlite",
- "tokio-stream",
  "tokio-test",
  "tokio-util",
  "tree_magic_mini",
@@ -1833,7 +1833,6 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]
