@@ -139,7 +139,7 @@ impl WritingFileAdapter for FFmpegAdapter {
             }
         }
         if !subtitle_streams.is_empty() {
-            let time_re = Regex::new(r".*\d.*-->.*\d.*").unwrap();
+            let time_re = Regex::new(r".*\d.*-->.*\d.*").context("invalid subtitle time regex")?;
             for probe_stream in subtitle_streams.iter() {
                 // extract subtitles
                 let mut cmd = Command::new("ffmpeg");
