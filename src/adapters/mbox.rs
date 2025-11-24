@@ -71,12 +71,9 @@ impl FileAdapter for MboxAdapter {
 
             let mut ais = vec![];
             for mail_bytes in FROM_REGEX.splitn(&content, usize::MAX) {
-                let mail_content = mail_bytes.splitn(2, |x| *x == b'\n').nth(1).unwrap();
-                let mail = mailparse::parse_mail(mail_content);
-                if mail.is_err() {
-                    continue;
-                }
-                let mail = mail.unwrap();
+                let mail_content_opt = mail_bytes.splitn(2, |x| *x == b'\n').nth(1);
+                let Some(mail_content) = mail_content_opt else { continue; };
+                let Ok(mail) = mailparse::parse_mail(mail_content) else { continue; };
 
                 let mut todos = VecDeque::new();
                 todos.push_back(mail);
@@ -103,15 +100,12 @@ impl FileAdapter for MboxAdapter {
                 let mut config = config.clone();
                 config.accurate = true;
 
-                let raw_body = mail.get_body_raw();
-                if raw_body.is_err() {
-                    continue;
-                }
+                let raw_body = match mail.get_body_raw() { Ok(b) => b, Err(_) => continue };
                 let ai2: AdaptInfo = AdaptInfo {
                     filepath_hint: path,
                     is_real_file: false,
                     archive_recursion_depth: archive_recursion_depth + 1,
-                    inp: Box::pin(Cursor::new(raw_body.unwrap())),
+                    inp: Box::pin(Cursor::new(raw_body)),
                     line_prefix: line_prefix.to_string(),
                     config,
                     postprocess,
