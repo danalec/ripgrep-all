@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::io::Read;
 use std::{fs::File, io::Write, iter::IntoIterator, path::PathBuf, str::FromStr};
-use clap::{Parser, CommandFactory};
+use clap::Parser;
 use once_cell::sync::OnceCell;
 
 fn is_default<T: Default + PartialEq>(t: &T) -> bool {

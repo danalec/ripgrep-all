@@ -5,7 +5,7 @@ use rga::config::{RgaConfig, split_args};
 use rga::matching::*;
 use rga::print_dur;
 use ripgrep_all as rga;
-use clap::{Parser, CommandFactory};
+use clap::CommandFactory;
 
 use schemars::schema_for;
 use std::process::Command;
