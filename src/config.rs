@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::io::Read;
 use std::{fs::File, io::Write, iter::IntoIterator, path::PathBuf, str::FromStr};
-use clap::Parser;
+use clap::{Parser, CommandFactory};
 use once_cell::sync::OnceCell;
 
 fn is_default<T: Default + PartialEq>(t: &T) -> bool {
@@ -146,7 +146,7 @@ pub struct RgaConfig {
     /// This option limits the depth.
     #[serde(default, skip_serializing_if = "is_default")]
     #[clap(
-        default_value,
+        default_value_t = MaxArchiveRecursion(5),
         long = "--rga-max-archive-recursion",
         require_equals = true
     )]
@@ -242,10 +242,9 @@ pub struct CacheConfig {
     /// Allowed suffixes on command line: k M G
     #[serde(default, skip_serializing_if = "is_default")]
     #[clap(
-        default_value,
+        default_value_t = CacheMaxBlobLen(2000000),
         long = "--rga-cache-max-blob-len",
-        require_equals = true,
-        // parse(try_from_str = parse_readable_bytes_str)
+        require_equals = true
     )]
     pub max_blob_len: CacheMaxBlobLen,
 
@@ -254,7 +253,7 @@ pub struct CacheConfig {
     /// Ranges from 1 - 22.
     #[serde(default, skip_serializing_if = "is_default")]
     #[clap(
-        default_value,
+        default_value_t = CacheCompressionLevel(12),
         long = "--rga-cache-compression-level",
         require_equals = true,
         help = ""
@@ -264,7 +263,7 @@ pub struct CacheConfig {
     /// Path to store cache DB.
     #[serde(default, skip_serializing_if = "is_default")]
     #[clap(
-        default_value,
+        default_value_t = CachePath::default(),
         long = "--rga-cache-path",
         require_equals = true
     )]
