@@ -265,3 +265,30 @@ pub fn get_adapters_filtered<T: AsRef<str>>(
     );
     Ok(adapters)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::RgaConfig;
+    #[test]
+    fn zip_extensions_override_applied() {
+        let mut cfg = RgaConfig::default();
+        cfg.zip_extensions = Some(vec!["zzz".to_string()]);
+        let adapters = get_adapters_filtered(None, &Vec::<String>::new(), &cfg).unwrap();
+        let zip = adapters.into_iter().find(|a| a.metadata().name == "zip").unwrap();
+        let fm = &zip.metadata().fast_matchers;
+        assert!(fm.len() == 1);
+        match &fm[0] { FastFileMatcher::FileExtension(s) => assert_eq!(s, "zzz") };
+    }
+    #[test]
+    fn ffmpeg_extensions_override_applied() {
+        let mut cfg = RgaConfig::default();
+        cfg.ffmpeg_extensions = Some(vec!["abc".to_string(), "DEF".to_string()]);
+        let adapters = get_adapters_filtered(None, &Vec::<String>::new(), &cfg).unwrap();
+        let ff = adapters.into_iter().find(|a| a.metadata().name == "ffmpeg").unwrap();
+        let fm = &ff.metadata().fast_matchers;
+        assert!(fm.len() == 2);
+        match &fm[0] { FastFileMatcher::FileExtension(s) => assert_eq!(s, "abc") };
+        match &fm[1] { FastFileMatcher::FileExtension(s) => assert_eq!(s, "DEF") };
+    }
+}

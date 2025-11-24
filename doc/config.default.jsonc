@@ -15,4 +15,10 @@
     // See https://github.com/phiresky/ripgrep-all/wiki for more information
     // to verify if your custom adapters are picked up correctly, run `rga --rga-list-adapters`
   ]
+  ,
+  // Override built-in adapter extensions
+  // Example: limit ZIP adapter to only .zip entries
+  "zip_extensions": ["zip"],
+  // Example: extend FFmpeg adapter to include additional video/audio formats
+  "ffmpeg_extensions": ["mkv", "mp4", "avi", "mp3", "ogg", "flac", "webm"]
 }
