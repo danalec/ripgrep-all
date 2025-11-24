@@ -32,7 +32,7 @@ lazy_static! {
         disabled_by_default: true,
         keep_fast_matchers_if_accurate: true
     };
-    static ref FROM_REGEX: Result<Regex> = Regex::new("\r?\nFrom [^\n]+\n");
+    static ref FROM_REGEX: Result<Regex> = Ok(Regex::new("\r?\nFrom [^\n]+\n")?);
 }
 #[derive(Default)]
 pub struct MboxAdapter;

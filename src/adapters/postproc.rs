@@ -208,7 +208,7 @@ impl FileAdapter for PostprocPageBreaks {
 /// Adds the prefix "Page N: " to each line,
 /// where N starts at one and is incremented for each ASCII Form Feed character in the input stream.
 /// ASCII form feeds are the page delimiters output by `pdftotext`.
-pub fn postproc_pagebreaks<T: AsyncRead + Send + 'static>(input: T, prefix: String, include_empty: bool) -> std::pin::Pin<Box<dyn AsyncRead + Send>> {
+pub fn postproc_pagebreaks<T: AsyncRead + Send + 'static>(input: T, prefix: String, _include_empty: bool) -> std::pin::Pin<Box<dyn AsyncRead + Send>> {
     let regex_linefeed = regex::bytes::Regex::new(r"\x0c").unwrap();
     let regex_newline = regex::bytes::Regex::new("\n").unwrap();
     let regex_crlf = regex::bytes::Regex::new("\r\n").unwrap();
@@ -235,7 +235,9 @@ pub fn postproc_pagebreaks<T: AsyncRead + Send + 'static>(input: T, prefix: Stri
                     }
                     pending = Some(Bytes::copy_from_slice(page_prefix.as_bytes()));
                 }
-                if !page_chunk.is_empty() || include_empty {
+                // Only flush and emit when there is actual content in the chunk.
+                // This avoids emitting a trailing empty page produced by a final form feed.
+                if !page_chunk.is_empty() {
                     if let Some(p) = pending.take() {
                         yield Ok(p);
                     }
@@ -245,7 +247,9 @@ pub fn postproc_pagebreaks<T: AsyncRead + Send + 'static>(input: T, prefix: Stri
             }
         }
 
-
+        
+        // Drop any pending page prefix at EOF to avoid a trailing empty page.
+        let _ = pending.take();
     };
     Box::pin(StreamReader::new(output_stream))
 }

@@ -36,5 +36,5 @@ fn main() -> anyhow::Result<()> {
             return Ok(());
         }
     }
-    Ok(open::that_detached(&fname).with_context(|| format!("opening '{fname}'"))?)
+    open::that_detached(&fname).with_context(|| format!("opening '{fname}'"))
 }

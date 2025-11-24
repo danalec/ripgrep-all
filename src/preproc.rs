@@ -44,9 +44,9 @@ async fn choose_adapter(
         if buf.starts_with(b"From \x0d") || buf.starts_with(b"From -") {
             Some("application/mbox")
         } else {
-            let mimetype = tree_magic::from_u8(buf);
+            let mimetype = infer::get(buf).map(|t| t.mime_type());
             debug!("mimetype: {:?}", mimetype);
-            Some(mimetype)
+            mimetype
         }
     } else {
         None
