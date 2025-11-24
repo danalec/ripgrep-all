@@ -194,13 +194,27 @@ pub fn pipe_output(
         .map_err(|e| map_exe_error(e, exe_name, help))?;
     let mut stdi = cmd.stdin.take().context("stdin not piped")?;
     let stdo = cmd.stdout.take().context("stdout not piped")?;
+    let crlf = regex::bytes::Regex::new("\r\n").unwrap();
+    let stdo_stream = tokio_util::io::ReaderStream::new(stdo);
+    let normalized_stream = async_stream::stream! {
+        for await chunk in stdo_stream {
+            match chunk {
+                Err(e) => yield Err(e),
+                Ok(chunk) => {
+                    let replaced = crlf.replace_all(&chunk, &b"\n"[..]);
+                    yield Ok(bytes::Bytes::copy_from_slice(&replaced));
+                }
+            }
+        }
+    };
+    let stdo_norm = StreamReader::new(normalized_stream);
 
     let join = tokio::spawn(async move {
         let mut z = inp;
         tokio::io::copy(&mut z, &mut stdi).await?;
         std::io::Result::Ok(())
     });
-    Ok(Box::pin(stdo.chain(
+    Ok(Box::pin(stdo_norm.chain(
         proc_wait(cmd, move || format!("subprocess: {cmd_log}")).chain(join_handle_to_stream(join)),
     )))
 }

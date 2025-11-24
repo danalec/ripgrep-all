@@ -136,6 +136,7 @@ pub fn postproc_prefix<T: AsyncRead + Send>(
     let line_prefix_n = format!("\n{line_prefix}"); // clone since we need it later
     let line_prefix_o = Bytes::copy_from_slice(line_prefix.as_bytes());
     let regex = regex::bytes::Regex::new("\n").unwrap();
+    let crlf = regex::bytes::Regex::new("\r\n").unwrap();
     let inp_stream = ReaderStream::new(inp);
     let oup_stream = stream! {
         yield Ok(line_prefix_o);
@@ -143,10 +144,11 @@ pub fn postproc_prefix<T: AsyncRead + Send>(
             match chunk {
                 Err(e) => yield Err(e),
                 Ok(chunk) => {
+                    let chunk = crlf.replace_all(&chunk, &b"\n"[..]);
                     if chunk.contains(&b'\n') {
                         yield Ok(Bytes::copy_from_slice(&regex.replace_all(&chunk, line_prefix_n.as_bytes())));
                     } else {
-                        yield Ok(chunk);
+                        yield Ok(Bytes::copy_from_slice(&chunk));
                     }
                 }
             }
@@ -204,6 +206,7 @@ impl FileAdapter for PostprocPageBreaks {
 pub fn postproc_pagebreaks(input: impl AsyncRead + Send) -> impl AsyncRead + Send {
     let regex_linefeed = regex::bytes::Regex::new(r"\x0c").unwrap();
     let regex_newline = regex::bytes::Regex::new("\n").unwrap();
+    let regex_crlf = regex::bytes::Regex::new("\r\n").unwrap();
     let mut page_count: i32 = 1;
     let mut page_prefix: String = format!("\nPage {page_count}: ");
 
@@ -216,6 +219,7 @@ pub fn postproc_pagebreaks(input: impl AsyncRead + Send) -> impl AsyncRead + Sen
 
         for await read_chunk in input_stream {
             let read_chunk = read_chunk?;
+            let read_chunk = regex_crlf.replace_all(&read_chunk, &b"\n"[..]);
             let page_chunks = regex_linefeed.split(&read_chunk);
             for (chunk_idx, page_chunk) in page_chunks.enumerate() {
                 if chunk_idx != 0 {
