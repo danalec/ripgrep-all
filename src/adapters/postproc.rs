@@ -189,7 +189,7 @@ impl FileAdapter for PostprocPageBreaks {
         let marker = a.config.postproc_binary_marker.clone().unwrap_or("[rga: binary data]".to_string());
         let prefix = a.config.postproc_page_prefix.clone().unwrap_or("Page ".to_string());
         let include_empty = a.config.postproc_page_include_empty.unwrap_or(true);
-        let read = postproc_pagebreaks(postproc_encoding(&a.line_prefix, a.inp, &marker).await?, &prefix, include_empty);
+        let read = postproc_pagebreaks(postproc_encoding(&a.line_prefix, a.inp, &marker).await?, prefix, include_empty);
         // keep adapt info (filename etc) except replace inp
         let ai = AdaptInfo {
             inp: Box::pin(read),
@@ -208,7 +208,7 @@ impl FileAdapter for PostprocPageBreaks {
 /// Adds the prefix "Page N: " to each line,
 /// where N starts at one and is incremented for each ASCII Form Feed character in the input stream.
 /// ASCII form feeds are the page delimiters output by `pdftotext`.
-pub fn postproc_pagebreaks<T: AsyncRead + Send>(input: T, prefix: &str, include_empty: bool) -> impl AsyncRead + Send + use<'_, T> {
+pub fn postproc_pagebreaks<T: AsyncRead + Send>(input: T, prefix: String, include_empty: bool) -> impl AsyncRead + Send + use<'_, T> {
     let regex_linefeed = regex::bytes::Regex::new(r"\x0c").unwrap();
     let regex_newline = regex::bytes::Regex::new("\n").unwrap();
     let regex_crlf = regex::bytes::Regex::new("\r\n").unwrap();
@@ -269,7 +269,7 @@ mod tests {
         let mock: Mock = Builder::new()
             .read(b"Hello\nWorld\x0cFoo Bar\n\x0cTest\x0c")
             .build();
-        let res = postproc_pagebreaks(mock).read_to_end(&mut output).await;
+        let res = postproc_pagebreaks(mock, "Page ".to_string(), true).read_to_end(&mut output).await;
         println!("{}", String::from_utf8_lossy(&output));
         assert!(res.is_ok());
         assert_eq!(
@@ -287,7 +287,7 @@ mod tests {
             .read(b"Foo Bar\n")
             .read(b"\x0cTest\x0c")
             .build();
-        let res = postproc_pagebreaks(mock).read_to_end(&mut output).await;
+        let res = postproc_pagebreaks(mock, "Page ".to_string(), true).read_to_end(&mut output).await;
         println!("{}", String::from_utf8_lossy(&output));
         assert!(res.is_ok());
         assert_eq!(
@@ -350,7 +350,7 @@ PREFIX:Page 3:
         let inp = Box::pin(Cursor::new(a));
         let inp = postproc_encoding("", inp).await?;
         if pagebreaks {
-            postproc_pagebreaks(inp).read_to_end(&mut oup).await?;
+            postproc_pagebreaks(inp, "Page ".to_string(), true).read_to_end(&mut oup).await?;
         } else {
             let x = postproc_prefix(line_prefix, inp);
             pin!(x);
