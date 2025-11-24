@@ -348,7 +348,7 @@ PREFIX:Page 3:
     ) -> Result<()> {
         let mut oup = Vec::new();
         let inp = Box::pin(Cursor::new(a));
-        let inp = postproc_encoding("", inp).await?;
+        let inp = postproc_encoding("", inp, "[rga: binary data]").await?;
         if pagebreaks {
             postproc_pagebreaks(inp, "Page ".to_string(), true).read_to_end(&mut oup).await?;
         } else {
