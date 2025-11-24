@@ -110,7 +110,7 @@ impl FromStr for CacheMaxBlobLen {
     long_about="rga: ripgrep, but also search in PDFs, E-Books, Office documents, zip, tar.gz, etc.",
     // TODO: long_about does not seem to work to only show this on short help
     after_help = "-h shows a concise overview, --help shows more detail and advanced options.\n\nAll other options not shown here are passed directly to rg, especially [PATTERN] and [PATH ...]",
-    usage = "rga [RGA OPTIONS] [RG OPTIONS] PATTERN [PATH ...]"
+    override_usage = "rga [RGA OPTIONS] [RG OPTIONS] PATTERN [PATH ...]"
 )]
 pub struct RgaConfig {
     /// Use more accurate but slower matching by mime type.
@@ -132,7 +132,7 @@ pub struct RgaConfig {
     #[clap(
         long = "--rga-adapters",
         require_equals = true,
-        require_delimiter = true
+        value_delimiter = ','
     )]
     pub adapters: Vec<String>,
 
@@ -202,7 +202,7 @@ pub struct RgaConfig {
     #[clap(
         long = "--rga-zip-extensions",
         require_equals = true,
-        require_delimiter = true
+        value_delimiter = ','
     )]
     pub zip_extensions: Option<Vec<String>>,
 
@@ -213,7 +213,7 @@ pub struct RgaConfig {
     #[clap(
         long = "--rga-ffmpeg-extensions",
         require_equals = true,
-        require_delimiter = true
+        value_delimiter = ','
     )]
     pub ffmpeg_extensions: Option<Vec<String>>,
 }
@@ -414,7 +414,7 @@ where
 
 /// Split arguments into the ones we care about and the ones rg cares about
 pub fn split_args(is_rga_preproc: bool) -> Result<(RgaConfig, Vec<OsString>)> {
-    let mut app = RgaConfig::command();
+    // let _app = RgaConfig::command();
     let mut firstarg = true;
     // debug!("{:#?}", app.p.flags);
     let (our_args, mut passthrough_args): (Vec<OsString>, Vec<OsString>) = std::env::args_os()
