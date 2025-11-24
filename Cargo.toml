@@ -20,7 +20,7 @@ perf-literal = ["regex/perf-literal"]
 
 [dependencies]
 anyhow = {version = "1.0", features = ["backtrace"]}
-async-compression = { version = "0.4.0", features = ["all", "all-algorithms", "tokio"] }
+async-compression = { version = "0.3.15", features = ["tokio"] }
 async-stream = "0.3.5"
 async-trait = "0.1.68"
 async_zip = {version = "0.0.12", features = ["full"]}
