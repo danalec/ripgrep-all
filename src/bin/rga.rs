@@ -124,7 +124,8 @@ fn main() -> anyhow::Result<()> {
         .arg(preproc_exe)
         .arg("--pre-glob")
         .arg(pre_glob)
-        .args(passthrough_args);
+        .args(passthrough_args)
+        .stderr(std::process::Stdio::piped());
     log::debug!("rg command to run: {:?}", cmd);
     let mut child = cmd
         .spawn()
@@ -134,6 +135,14 @@ fn main() -> anyhow::Result<()> {
 
     log::debug!("running rg took {}", print_dur(before));
     if !result.success() {
+        if let Some(mut stderr) = child.stderr.take() {
+            use std::io::Read as _;
+            let mut buf = String::new();
+            let _ = stderr.read_to_string(&mut buf);
+            if !buf.trim().is_empty() {
+                eprintln!("ripgrep error:\n{}", buf.trim());
+            }
+        }
         std::process::exit(result.code().unwrap_or(1));
     }
     Ok(())

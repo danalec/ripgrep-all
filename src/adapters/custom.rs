@@ -166,7 +166,13 @@ fn proc_wait(mut child: Child, context: impl FnOnce() -> String) -> impl AsyncRe
         if res.success() {
             yield std::io::Result::Ok(Bytes::new());
         } else {
-            Err(format_err!("{:?}", res)).with_context(context).map_err(to_io_err)?;
+            let mut stderr_text = String::new();
+            if let Some(mut stderr) = child.stderr.take() {
+                use tokio::io::AsyncReadExt as _;
+                let _ = stderr.read_to_string(&mut stderr_text).await;
+            }
+            let err = if stderr_text.is_empty() { format!("{:?}", res) } else { format!("{:?}\n{}", res, stderr_text) };
+            Err(format_err!("{}", err)).with_context(context).map_err(to_io_err)?;
         }
     };
     StreamReader::new(s)
@@ -183,10 +189,11 @@ pub fn pipe_output(
     let mut cmd = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| map_exe_error(e, exe_name, help))?;
-    let mut stdi = cmd.stdin.take().expect("is piped");
-    let stdo = cmd.stdout.take().expect("is piped");
+    let mut stdi = cmd.stdin.take().context("stdin not piped")?;
+    let stdo = cmd.stdout.take().context("stdout not piped")?;
 
     let join = tokio::spawn(async move {
         let mut z = inp;
