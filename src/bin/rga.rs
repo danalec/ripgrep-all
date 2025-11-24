@@ -90,6 +90,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let adapters = get_adapters_filtered(config.custom_adapters.clone(), &config.adapters)?;
+    log::info!("enabled adapters: {}", adapters.iter().map(|a| a.metadata().name.clone()).collect::<Vec<_>>().join(", "));
 
     let pre_glob = if !config.accurate {
         let extensions = adapters
@@ -104,6 +105,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         "*".to_owned()
     };
+    log::info!("pre-glob: {}", pre_glob);
 
     add_exe_to_path()?;
 
