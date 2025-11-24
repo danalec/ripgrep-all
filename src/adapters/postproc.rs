@@ -208,7 +208,7 @@ impl FileAdapter for PostprocPageBreaks {
 /// Adds the prefix "Page N: " to each line,
 /// where N starts at one and is incremented for each ASCII Form Feed character in the input stream.
 /// ASCII form feeds are the page delimiters output by `pdftotext`.
-pub fn postproc_pagebreaks<T: AsyncRead + Send>(input: T, prefix: String, include_empty: bool) -> std::pin::Pin<Box<dyn AsyncRead + Send>> {
+pub fn postproc_pagebreaks<T: AsyncRead + Send + 'static>(input: T, prefix: String, include_empty: bool) -> std::pin::Pin<Box<dyn AsyncRead + Send>> {
     let regex_linefeed = regex::bytes::Regex::new(r"\x0c").unwrap();
     let regex_newline = regex::bytes::Regex::new("\n").unwrap();
     let regex_crlf = regex::bytes::Regex::new("\r\n").unwrap();
