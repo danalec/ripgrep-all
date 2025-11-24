@@ -1,4 +1,4 @@
-// Context not used
+use anyhow::Context;
 use clap::Parser;
 use std::process::Command;
 
@@ -28,7 +28,7 @@ fn main() -> anyhow::Result<()> {
             .map_or_else(
                 |err| match err.kind() {
                     NotFound => Ok(false),
-                    _ => Err(err),
+                    _ => Err(err).with_context(|| format!("evince launch failed for '{fname}'")),
                 },
                 |_| Ok(true),
             )?;
@@ -36,5 +36,5 @@ fn main() -> anyhow::Result<()> {
             return Ok(());
         }
     }
-    Ok(open::that_detached(&fname)?)
+    Ok(open::that_detached(&fname).with_context(|| format!("opening '{fname}'"))?)
 }

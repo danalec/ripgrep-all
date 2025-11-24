@@ -72,7 +72,7 @@ fn main() -> anyhow::Result<()> {
         .spawn()
         .map_err(|e| map_exe_error(e, "fzf", "Please make sure you have fzf installed."))?;
 
-    let output = child.wait_with_output()?;
+    let output = child.wait_with_output().with_context(|| "waiting for fzf output")?;
     let mut x = output.stdout.split(|e| e == &b'\n');
     let final_query =
         std::str::from_utf8(x.next().context("fzf output empty")?).context("fzf query not utf8")?;
