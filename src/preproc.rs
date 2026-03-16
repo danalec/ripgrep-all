@@ -63,7 +63,11 @@ enum Ret {
     Passthrough(AdaptInfo),
 }
 async fn buf_choose_adapter(ai: AdaptInfo) -> Result<Ret> {
-    let mut inp = BufReader::with_capacity(1 << 16, ai.inp);
+    // Only use a buffer if we need to detect mime types (accurate mode)
+    // or if it's a real file (where buffering helps performance).
+    // For files already in memory or from other streams, a large buffer might be redundant.
+    let capacity = if ai.config.accurate { 8192 } else { 1024 };
+    let mut inp = BufReader::with_capacity(capacity, ai.inp);
     let adapter = choose_adapter(
         &ai.config,
         &ai.filepath_hint,
@@ -153,13 +157,20 @@ async fn adapt_caching(
     };
 
     let mut cache = cache.context("No cache?")?;
+    let file_mtime_unix_ms = ai.file_mtime_unix_ms.unwrap_or_else(|| {
+        std::fs::metadata(&ai.filepath_hint)
+            .and_then(|m| m.modified())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+    });
     let cache_key = CacheKey::new(
-        ai.postprocess,
         &ai.filepath_hint,
+        file_mtime_unix_ms,
         adapter.as_ref(),
         &active_adapters,
-    )?;
-    // let dbg_ctx = format!("adapter {}", &adapter.metadata().name);
+        &ai.config,
+    )?;    // let dbg_ctx = format!("adapter {}", &adapter.metadata().name);
     let cached = cache.get(&cache_key).await.context("cache.get")?;
     match cached {
         Some(cached) => Ok(Box::pin(ZstdDecoder::new(Cursor::new(cached)))),

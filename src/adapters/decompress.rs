@@ -103,6 +103,7 @@ impl FileAdapter for DecompressAdapter {
         Ok(one_file(AdaptInfo {
             filepath_hint: get_inner_filename(&ai.filepath_hint),
             is_real_file: false,
+            file_mtime_unix_ms: None,
             archive_recursion_depth: ai.archive_recursion_depth + 1,
             inp: decompress_any(detection_reason, ai.inp)?,
             line_prefix: ai.line_prefix,

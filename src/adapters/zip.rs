@@ -80,12 +80,17 @@ impl FileAdapter for ZipAdapter {
                     let new_line_prefix = format!("{}{}: ", line_prefix, file.filename());
                     let fname = PathBuf::from(file.filename());
                     tokio::pin!(reader);
-                    let mut buf = Vec::with_capacity(file.uncompressed_size() as usize);
+                    let mut buf = Vec::new();
+                    // Don't pre-allocate more than 10MB to avoid memory bombs from malicious or corrupt zips
+                    if file.uncompressed_size() < 10_000_000 {
+                        buf.reserve(file.uncompressed_size() as usize);
+                    }
                     reader.read_to_end(&mut buf).await?;
                     let s = async_stream::stream! { yield std::io::Result::Ok(bytes::Bytes::from(buf)); };
                     yield Ok(AdaptInfo {
                         filepath_hint: fname,
                         is_real_file: false,
+                        file_mtime_unix_ms: None,
                         inp: Box::pin(tokio_util::io::StreamReader::new(s)),
                         line_prefix: new_line_prefix,
                         archive_recursion_depth: archive_recursion_depth + 1,
@@ -125,12 +130,17 @@ impl FileAdapter for ZipAdapter {
                         let fname = PathBuf::from(&filename);
                         let reader = entry.reader();
                         tokio::pin!(reader);
-                        let mut buf = Vec::with_capacity(uncompressed as usize);
+                        let mut buf = Vec::new();
+                        // Don't pre-allocate more than 10MB to avoid memory bombs from malicious or corrupt zips
+                        if uncompressed < 10_000_000 {
+                            buf.reserve(uncompressed as usize);
+                        }
                         reader.read_to_end(&mut buf).await?;
                         let s = async_stream::stream! { yield std::io::Result::Ok(bytes::Bytes::from(buf)); };
                         yield Ok(AdaptInfo {
                             filepath_hint: fname,
                             is_real_file: false,
+                            file_mtime_unix_ms: None,
                             inp: Box::pin(tokio_util::io::StreamReader::new(s)),
                             line_prefix: new_line_prefix,
                             archive_recursion_depth: archive_recursion_depth + 1,

@@ -1,9 +1,9 @@
-use crate::{adapters::FileAdapter, preproc::ActiveAdapters};
+use crate::{adapters::FileAdapter, preproc::ActiveAdapters, config::RgaConfig};
 use anyhow::{Context, Result};
 use log::warn;
 use path_clean::PathClean;
 use rusqlite::{OptionalExtension, named_params};
-use std::{path::Path, time::UNIX_EPOCH};
+use std::path::Path;
 use tokio_rusqlite::Connection;
 
 static SCHEMA_VERSION: i32 = 3;
@@ -18,15 +18,12 @@ pub struct CacheKey {
 }
 impl CacheKey {
     pub fn new(
-        postprocess: bool,
         filepath_hint: &Path,
+        file_mtime_unix_ms: i64,
         adapter: &dyn FileAdapter,
         active_adapters: &ActiveAdapters,
+        config: &RgaConfig,
     ) -> Result<Self> {
-        let meta = std::fs::metadata(filepath_hint)
-            .with_context(|| format!("reading metadata for {}", filepath_hint.to_string_lossy()))?;
-        let modified = meta.modified().context("could not get file modification time")?;
-        let file_mtime_unix_ms = modified.duration_since(UNIX_EPOCH)?.as_millis() as i64;
         let active_adapters = if adapter.metadata().recurses {
             serde_json::to_string(
                 &active_adapters
@@ -38,11 +35,7 @@ impl CacheKey {
             "null".to_string()
         };
         Ok(Self {
-            config_hash: if postprocess {
-                "a41e2e9".to_string()
-            } else {
-                "f1502a3".to_string()
-            }, // todo: when we add more config options that affect caching, create a struct and actually hash it
+            config_hash: config.config_hash(),
             adapter: adapter.metadata().name.clone(),
             adapter_version: adapter.metadata().version,
             file_path: filepath_hint.clean().to_string_lossy().to_string(),

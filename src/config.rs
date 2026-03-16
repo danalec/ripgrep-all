@@ -230,6 +230,25 @@ pub struct RgaConfig {
     pub postproc_page_include_empty: Option<bool>,
 }
 
+impl RgaConfig {
+    pub fn config_hash(&self) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut s = std::collections::hash_map::DefaultHasher::new();
+        self.accurate.hash(&mut s);
+        self.adapters.hash(&mut s);
+        self.max_archive_recursion.0.hash(&mut s);
+        self.no_prefix_filenames.hash(&mut s);
+        self.zip_extensions.hash(&mut s);
+        self.ffmpeg_extensions.hash(&mut s);
+        self.postproc_binary_marker.hash(&mut s);
+        self.postproc_page_prefix.hash(&mut s);
+        self.postproc_page_include_empty.hash(&mut s);
+        // Include version to invalidate cache on updates
+        env!("CARGO_PKG_VERSION").hash(&mut s);
+        format!("{:016x}", s.finish())
+    }
+}
+
 #[derive(Parser, Debug, Deserialize, Serialize, JsonSchema, Default, Clone, PartialEq)]
 pub struct CacheConfig {
     /// Disable caching of results.

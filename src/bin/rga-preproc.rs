@@ -24,12 +24,20 @@ async fn main() -> anyhow::Result<()> {
     let i = File::open(&path)
         .await
         .context("Specified input file not found")?;
+    let meta = i.metadata().await?;
+    let file_mtime_unix_ms = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64);
+
     let i = BufReader::new(i);
     let mut o = tokio::io::stdout();
     let ai = AdaptInfo {
         inp: Box::pin(i),
         filepath_hint: path,
         is_real_file: true,
+        file_mtime_unix_ms,
         line_prefix: "".to_string(),
         archive_recursion_depth: 0,
         postprocess: !config.no_prefix_filenames,

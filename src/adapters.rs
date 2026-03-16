@@ -96,6 +96,8 @@ pub struct AdaptInfo {
     pub filepath_hint: PathBuf,
     /// true if filepath_hint is an actual file on the file system
     pub is_real_file: bool,
+    /// mtime of the file in unix milliseconds. Only set if is_real_file is true and metadata was already fetched.
+    pub file_mtime_unix_ms: Option<i64>,
     /// depth at which this file is in archives. 0 for real filesystem
     pub archive_recursion_depth: i32,
     /// stream to read the file from. can be from a file or from some decoder
