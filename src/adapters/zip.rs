@@ -228,7 +228,7 @@ mod test {
     async fn only_seek_zip_fs() -> Result<()> {
         let zip = test_data_dir().join("only-seek-zip.zip");
         let (a, d) = simple_fs_adapt_info(&zip).await?;
-        let _v = adapted_to_vec(loop_adapt(&ZipAdapter::new(), d, a).await?).await?;
+        let _v = adapted_to_vec(loop_adapt(&ZipAdapter::new(), d, a, crate::adapters::get_all_adapters(None).0).await?).await?;
         // assert_eq!(String::from_utf8(v)?, "");
 
         Ok(())
@@ -237,7 +237,7 @@ mod test {
     async fn only_seek_zip_mem() -> Result<()> {
         let zip = test_data_dir().join("only-seek-zip.zip");
         let (a, d) = simple_adapt_info(&zip, Box::pin(File::open(&zip).await?));
-        let v = adapted_to_vec(loop_adapt(&ZipAdapter::new(), d, a)?).await?;
+        let v = adapted_to_vec(loop_adapt(&ZipAdapter::new(), d, a, crate::adapters::get_all_adapters(None).0)?).await?;
         // assert_eq!(String::from_utf8(v)?, "");
 
         Ok(())
@@ -251,7 +251,7 @@ mod test {
             &PathBuf::from("outer.zip"),
             Box::pin(std::io::Cursor::new(zipfile)),
         );
-        let buf = adapted_to_vec(loop_adapt(&adapter, d, a).await?).await?;
+        let buf = adapted_to_vec(loop_adapt(&adapter, d, a, crate::adapters::get_all_adapters(None).0).await?).await?;
 
         assert_eq!(
             String::from_utf8(buf)?,

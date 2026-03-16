@@ -306,7 +306,7 @@ mod tests {
         let fname = test_data_dir().join("twoblankpages.pdf");
         let rd = File::open(&fname).await?;
         let (a, d) = simple_adapt_info(&fname, Box::pin(rd));
-        let res = loop_adapt(&adapter, d, a).await?;
+        let res = loop_adapt(&adapter, d, a, crate::adapters::get_all_adapters(None).0).await?;
 
         let buf = adapted_to_vec(res).await?;
 

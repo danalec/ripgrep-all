@@ -205,7 +205,7 @@ mod tests {
         let filepath = test_data_dir().join("mail_with_attachment.mbox");
 
         let (a, d) = simple_adapt_info(&filepath, Box::pin(File::open(&filepath).await?));
-        let mut r = loop_adapt(&adapter, d, a).await?;
+        let mut r = loop_adapt(&adapter, d, a, crate::adapters::get_all_adapters(None).0).await?;
         let mut count = 0;
         while let Some(file) = r.next().await {
             let mut file = file?;
