@@ -56,6 +56,39 @@ fn list_adapters(args: RgaConfig) -> Result<()> {
     }
     Ok(())
 }
+fn doctor() -> Result<()> {
+    println!("Checking ripgrep-all dependencies...\n");
+    let binaries = ["rg", "pandoc", "pdftotext", "ffmpeg", "ffprobe"];
+    for bin in binaries {
+        let arg = if bin == "pdftotext" { "-v" } else { "--version" };
+        match Command::new(bin).arg(arg).output() {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let text = if !stdout.trim().is_empty() { &stdout } else { &stderr };
+                let first_line = text.lines().next().unwrap_or("unknown version");
+                println!("✅ {} is installed: {}", bin, first_line);
+            }
+            Err(_) => {
+                println!("❌ {} is NOT installed or not in PATH", bin);
+            }
+        }
+    }
+    println!("\nRun 'rga --rga-list-adapters' to see which adapters use which binaries.");
+    Ok(())
+}
+
+fn clear_cache(config: &RgaConfig) -> Result<()> {
+    let path = std::path::Path::new(&config.cache.path.0);
+    if path.exists() {
+        std::fs::remove_dir_all(path)?;
+        println!("✅ Cache at {} cleared.", path.display());
+    } else {
+        println!("ℹ️ Cache at {} does not exist.", path.display());
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     // set debugging as early as possible
     if std::env::args().any(|e| e == "--debug") {
@@ -67,6 +100,17 @@ fn main() -> anyhow::Result<()> {
     }
 
     let (config, mut passthrough_args) = split_args(false)?;
+
+    if config.doctor {
+        return doctor();
+    }
+    if config.cache_clear {
+        return clear_cache(&config);
+    }
+    if config.cache_prune {
+        println!("Pruning cache is not fully implemented yet, clearing cache instead...");
+        return clear_cache(&config);
+    }
 
     if config.print_config_schema {
         println!("{}", serde_json::to_string_pretty(&schema_for!(RgaConfig))?);

@@ -1,4 +1,4 @@
-use crate::{adapters::custom::CustomAdapterConfig, project_dirs};
+﻿use crate::{adapters::custom::CustomAdapterConfig, project_dirs};
 use anyhow::{Context, Result};
 use derive_more::FromStr;
 use log::*;
@@ -120,7 +120,7 @@ pub struct RgaConfig {
     /// With this flag, rga will try to detect the mime type of input files using the magic bytes (similar to the `file` utility), and use that to choose the adapter.
     /// Detection is only done on the first 8KiB of the file, since we can't always seek on the input (in archives).
     #[serde(default, skip_serializing_if = "is_default")]
-    #[clap(long = "--rga-accurate")]
+    #[clap(long = "rga-accurate")]
     pub accurate: bool,
 
     /// Change which adapters to use and in which priority order (descending).
@@ -130,7 +130,7 @@ pub struct RgaConfig {
     /// - "+bar,baz" means use all default adapters and also bar and baz.
     #[serde(default, skip_serializing_if = "is_default")]
     #[clap(
-        long = "--rga-adapters",
+        long = "rga-adapters",
         require_equals = true,
         value_delimiter = ','
     )]
@@ -147,7 +147,7 @@ pub struct RgaConfig {
     #[serde(default, skip_serializing_if = "is_default")]
     #[clap(
         default_value_t = MaxArchiveRecursion(5),
-        long = "--rga-max-archive-recursion",
+        long = "rga-max-archive-recursion",
         require_equals = true
     )]
     pub max_archive_recursion: MaxArchiveRecursion,
@@ -157,7 +157,7 @@ pub struct RgaConfig {
     /// Inside archives, by default rga prefixes the content of each file with the file path within the archive.
     /// This is usually useful, but can cause problems because then the inner path is also searched for the pattern.
     #[serde(default, skip_serializing_if = "is_default")]
-    #[clap(long = "--rga-no-prefix-filenames")]
+    #[clap(long = "rga-no-prefix-filenames")]
     pub no_prefix_filenames: bool,
 
     #[serde(default, skip_serializing_if = "is_default")]
@@ -165,7 +165,7 @@ pub struct RgaConfig {
     pub custom_adapters: Option<Vec<CustomAdapterConfig>>,
 
     #[serde(skip)]
-    #[clap(long = "--rga-config-file", require_equals = true)]
+    #[clap(long = "rga-config-file", require_equals = true)]
     pub config_file_path: Option<String>,
 
     /// Same as passing path directly, except if argument is empty.
@@ -173,16 +173,16 @@ pub struct RgaConfig {
     /// Kinda hacky, but if no file is found, `fzf` calls `rga` with empty string as path, which causes "No such file or directory from rg".
     /// So filter those cases and return specially.
     #[serde(skip)] // CLI only
-    #[clap(long = "--rga-fzf-path", require_equals = true, hide = true)]
+    #[clap(long = "rga-fzf-path", require_equals = true, hide = true)]
     pub fzf_path: Option<String>,
 
     #[serde(skip)] // CLI only
-    #[clap(long = "--rga-list-adapters", help = "List all known adapters")]
+    #[clap(long = "rga-list-adapters", help = "List all known adapters")]
     pub list_adapters: bool,
 
     #[serde(skip)] // CLI only
     #[clap(
-        long = "--rga-print-config-schema",
+        long = "rga-print-config-schema",
         help = "Print the JSON Schema of the configuration file"
     )]
     pub print_config_schema: bool,
@@ -195,12 +195,24 @@ pub struct RgaConfig {
     #[clap(long, help = "Show version of ripgrep itself")]
     pub rg_version: bool,
 
+    #[serde(skip)] // CLI only
+    #[clap(long = "rga-doctor", help = "Check if required external programs are installed")]
+    pub doctor: bool,
+
+    #[serde(skip)] // CLI only
+    #[clap(long = "rga-cache-clear", help = "Clear the rga cache database completely")]
+    pub cache_clear: bool,
+
+    #[serde(skip)] // CLI only
+    #[clap(long = "rga-cache-prune", help = "Prune the cache (remove old or missing entries)")]
+    pub cache_prune: bool,
+
     /// Override file extensions for the built-in ZIP adapter.
     ///
     /// If set, replaces the default list ["zip","jar","xpi","kra","snagx"].
     #[serde(default)]
     #[clap(
-        long = "--rga-zip-extensions",
+        long = "rga-zip-extensions",
         require_equals = true,
         value_delimiter = ','
     )]
@@ -211,22 +223,22 @@ pub struct RgaConfig {
     /// If set, replaces the default list ["mkv","mp4","avi","mp3","ogg","flac","webm"].
     #[serde(default)]
     #[clap(
-        long = "--rga-ffmpeg-extensions",
+        long = "rga-ffmpeg-extensions",
         require_equals = true,
         value_delimiter = ','
     )]
     pub ffmpeg_extensions: Option<Vec<String>>,
 
     #[serde(default)]
-    #[clap(long = "--rga-postproc-binary-marker", require_equals = true)]
+    #[clap(long = "rga-postproc-binary-marker", require_equals = true)]
     pub postproc_binary_marker: Option<String>,
 
     #[serde(default)]
-    #[clap(long = "--rga-postproc-page-prefix", require_equals = true)]
+    #[clap(long = "rga-postproc-page-prefix", require_equals = true)]
     pub postproc_page_prefix: Option<String>,
 
     #[serde(default)]
-    #[clap(long = "--rga-postproc-page-include-empty")] 
+    #[clap(long = "rga-postproc-page-include-empty")] 
     pub postproc_page_include_empty: Option<bool>,
 }
 
@@ -262,7 +274,7 @@ pub struct CacheConfig {
     ///
     /// If you pass this flag, all caching will be disabled.
     #[serde(default, skip_serializing_if = "is_default")]
-    #[clap(long = "--rga-no-cache")]
+    #[clap(long = "rga-no-cache")]
     pub disabled: bool,
 
     /// Max compressed size to cache.
@@ -274,7 +286,7 @@ pub struct CacheConfig {
     #[serde(default, skip_serializing_if = "is_default")]
     #[clap(
         default_value_t = CacheMaxBlobLen(2000000),
-        long = "--rga-cache-max-blob-len",
+        long = "rga-cache-max-blob-len",
         require_equals = true
     )]
     pub max_blob_len: CacheMaxBlobLen,
@@ -285,7 +297,7 @@ pub struct CacheConfig {
     #[serde(default, skip_serializing_if = "is_default")]
     #[clap(
         default_value_t = CacheCompressionLevel(12),
-        long = "--rga-cache-compression-level",
+        long = "rga-cache-compression-level",
         require_equals = true,
         help = ""
     )]
@@ -295,7 +307,7 @@ pub struct CacheConfig {
     #[serde(default, skip_serializing_if = "is_default")]
     #[clap(
         default_value_t = CachePath::default(),
-        long = "--rga-cache-path",
+        long = "rga-cache-path",
         require_equals = true
     )]
     pub path: CachePath,
@@ -439,6 +451,9 @@ where
         res.print_config_schema = arg_matches.print_config_schema;
         res.rg_help = arg_matches.rg_help;
         res.rg_version = arg_matches.rg_version;
+        res.doctor = arg_matches.doctor;
+        res.cache_clear = arg_matches.cache_clear;
+        res.cache_prune = arg_matches.cache_prune;
     }
     Ok(res)
 }
@@ -478,3 +493,4 @@ pub fn split_args(is_rga_preproc: bool) -> Result<(RgaConfig, Vec<OsString>)> {
     debug!("rga (passthrough) args: {:?}", passthrough_args);
     Ok((matches, passthrough_args))
 }
+
