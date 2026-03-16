@@ -68,17 +68,25 @@ impl WritingFileAdapter for FFmpegAdapter {
             is_real_file,
             filepath_hint,
             line_prefix,
+            mut inp,
             ..
         } = ai;
-        if !is_real_file {
-            // we *could* probably adapt this to also work based on streams,
-            // it would require using a BufReader to read at least part of the file to memory
-            // but really when would you want to search for videos within archives?
-            // So instead, we only run this adapter if the file is a actual file on disk for now
-            async_writeln!(oup, "{line_prefix}[rga: skipping video in archive]\n")?;
-            return Ok(());
-        }
-        let inp_fname = filepath_hint;
+
+        // If it's a stream (e.g., inside an archive), we need to buffer it to a temporary file
+        // because we run multiple passes of ffprobe and ffmpeg over the data.
+        let temp_dir;
+        let temp_file_path;
+        let inp_fname = if is_real_file {
+            filepath_hint.clone()
+        } else {
+            temp_dir = tempfile::tempdir()?;
+            let t_path = temp_dir.path().join(filepath_hint.file_name().unwrap_or_else(|| std::ffi::OsStr::new("vid.tmp")));
+            let mut f = tokio::fs::File::create(&t_path).await?;
+            tokio::io::copy(&mut inp, &mut f).await?;
+            temp_file_path = t_path;
+            temp_file_path.clone()
+        };
+
         let spawn_fail = |e| map_exe_error(e, "ffprobe", "Make sure you have ffmpeg installed.");
         let subtitle_streams = {
             let probe = Command::new("ffprobe")
@@ -131,7 +139,7 @@ impl WritingFileAdapter for FFmpegAdapter {
             let mut lines = BufReader::new(probe.stdout.as_mut().context("ffprobe stdout not piped")?).lines();
             while let Some(line) = lines.next_line().await? {
                 let line = line.replace("\\r\\n", "\n").replace("\\n", "\n"); // just unescape newlines
-                async_writeln!(oup, "metadata: {line}")?;
+                async_writeln!(oup, "{line_prefix}metadata: {line}")?;
             }
             let exit = probe.wait().await?;
             if !exit.success() {
@@ -165,7 +173,7 @@ impl WritingFileAdapter for FFmpegAdapter {
                     } else if line.is_empty() {
                         async_writeln!(oup)?;
                     } else {
-                        async_writeln!(oup, "{time}: {line}")?;
+                        async_writeln!(oup, "{line_prefix}{time}: {line}")?;
                     }
                 }
                 let exit = cmd.wait().await?;
