@@ -58,7 +58,7 @@ fn list_adapters(args: RgaConfig) -> Result<()> {
 }
 fn doctor() -> Result<()> {
     println!("Checking ripgrep-all dependencies...\n");
-    let binaries = ["rg", "pandoc", "pdftotext", "ffmpeg", "ffprobe"];
+    let binaries = ["rg", "pandoc", "pdftotext", "ffmpeg", "ffprobe", "tesseract"];
     for bin in binaries {
         let arg = if bin == "pdftotext" { "-v" } else { "--version" };
         match Command::new(bin).arg(arg).output() {

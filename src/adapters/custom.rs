@@ -146,6 +146,18 @@ lazy_static! {
             disabled_by_default: None,
             match_only_by_mime: None,
             output_path_hint: Some("${input_virtual_path}.txt.asciipagebreaks".into())
+        },
+        CustomAdapterConfig {
+            name: "tesseract".to_owned(),
+            version: 1,
+            description: "Uses tesseract to extract text from images".to_owned(),
+            extensions: strs(&["jpg", "jpeg", "png", "webp", "tiff", "bmp", "gif"]),
+            mimetypes: Some(strs(&["image/jpeg", "image/png", "image/webp", "image/tiff", "image/bmp", "image/gif"])),
+            binary: "tesseract".to_string(),
+            args: strs(&["stdin", "stdout"]),
+            disabled_by_default: Some(true),
+            match_only_by_mime: None,
+            output_path_hint: None
         }
     ];
 }
