@@ -1,4 +1,4 @@
-use anyhow::Context;
+﻿use anyhow::Context;
 use clap::Parser;
 use rga::adapters::custom::map_exe_error;
 use ripgrep_all as rga;
@@ -12,13 +12,13 @@ struct Args {
     #[clap(value_parser)]
     initial_query: Option<String>,
     /// Extra parameters to pass to ripgrep (list view)
-    #[clap(long = "--rg-params", require_equals = true)]
+    #[clap(long = "rg-params", require_equals = true)]
     rg_params: Option<String>,
     /// Extra parameters to pass to ripgrep preview (content view)
-    #[clap(long = "--rg-preview-params", require_equals = true)]
+    #[clap(long = "rg-preview-params", require_equals = true)]
     rg_preview_params: Option<String>,
     /// Extra parameters to pass to fzf
-    #[clap(long = "--fzf-params", require_equals = true)]
+    #[clap(long = "fzf-params", require_equals = true)]
     fzf_params: Option<String>,
 }
 
@@ -82,3 +82,4 @@ fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+
