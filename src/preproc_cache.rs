@@ -6,15 +6,17 @@ use rusqlite::{OptionalExtension, named_params};
 use std::path::Path;
 use tokio_rusqlite::Connection;
 
+use serde::{Deserialize, Serialize};
+
 static SCHEMA_VERSION: i32 = 3;
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct CacheKey {
-    config_hash: String,
-    adapter: String,
-    adapter_version: i32,
-    active_adapters: String,
-    file_path: String,
-    file_mtime_unix_ms: i64,
+    pub config_hash: String,
+    pub adapter: String,
+    pub adapter_version: i32,
+    pub active_adapters: String,
+    pub file_path: String,
+    pub file_mtime_unix_ms: i64,
 }
 impl CacheKey {
     pub fn new(
@@ -180,10 +182,40 @@ impl PreprocCache for SqliteCache {
             .await?)
     }
 }
+pub struct RedisCache;
+#[async_trait::async_trait]
+impl PreprocCache for RedisCache {
+    async fn get(&self, _key: &CacheKey) -> Result<Option<Vec<u8>>> {
+        Err(anyhow::anyhow!("Redis cache not implemented yet"))
+    }
+    async fn set(&mut self, _key: &CacheKey, _value: Vec<u8>) -> Result<()> {
+        Err(anyhow::anyhow!("Redis cache not implemented yet"))
+    }
+}
+
+pub struct S3Cache;
+#[async_trait::async_trait]
+impl PreprocCache for S3Cache {
+    async fn get(&self, _key: &CacheKey) -> Result<Option<Vec<u8>>> {
+        Err(anyhow::anyhow!("S3 cache not implemented yet"))
+    }
+    async fn set(&mut self, _key: &CacheKey, _value: Vec<u8>) -> Result<()> {
+        Err(anyhow::anyhow!("S3 cache not implemented yet"))
+    }
+}
+
 /// opens a default cache
-pub async fn open_cache_db(path: &Path) -> Result<impl PreprocCache + use<>> {
-    std::fs::create_dir_all(path)?;
-    SqliteCache::new(path).await
+pub async fn open_cache_db(config: &RgaConfig) -> Result<Box<dyn PreprocCache + Send>> {
+    match config.cache.cache_type.as_str() {
+        "sqlite" => {
+            let path = Path::new(&config.cache.path.0);
+            std::fs::create_dir_all(path)?;
+            Ok(Box::new(SqliteCache::new(path).await?))
+        }
+        "redis" => Ok(Box::new(RedisCache)),
+        "s3" => Ok(Box::new(S3Cache)),
+        other => Err(anyhow::anyhow!("Unknown cache type: {}", other)),
+    }
 }
 
 #[cfg(test)]
@@ -194,7 +226,9 @@ mod test {
     #[tokio::test]
     async fn test_read_write() -> anyhow::Result<()> {
         let path = tempfile::tempdir()?;
-        let _db = open_cache_db(&path.path().join("foo.sqlite3")).await?;
+        let mut config = RgaConfig::default();
+        config.cache.path = crate::config::CachePath(path.path().to_string_lossy().to_string());
+        let _db = open_cache_db(&config).await?;
         // db.set();
         Ok(())
     }

@@ -89,7 +89,8 @@ fn clear_cache(config: &RgaConfig) -> Result<()> {
     Ok(())
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     // set debugging as early as possible
     if std::env::args().any(|e| e == "--debug") {
         env_logger::Builder::from_default_env()
@@ -110,6 +111,12 @@ fn main() -> anyhow::Result<()> {
     if config.cache_prune {
         println!("Pruning cache is not fully implemented yet, clearing cache instead...");
         return clear_cache(&config);
+    }
+    if config.daemon {
+        let path = std::path::Path::new(&config.cache.path.0);
+        let port = config.cache.daemon_port;
+        rga::daemon::run_daemon(path, port).await?;
+        return Ok(());
     }
 
     if config.print_config_schema {

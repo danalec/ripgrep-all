@@ -159,8 +159,21 @@ async fn adapt_caching(
     let cache_compression_level = ai.config.cache.compression_level;
     let cache_max_blob_len = ai.config.cache.max_blob_len;
 
-    let cache = if ai.is_real_file && !ai.config.cache.disabled {
-        Some(open_cache_db(Path::new(&ai.config.cache.path.0)).await?)
+    let cache: Option<Box<dyn PreprocCache + Send>> = if ai.is_real_file && !ai.config.cache.disabled {
+        let daemon_port = ai.config.cache.daemon_port;
+        // Check if daemon is alive with a quick timeout
+        let daemon_available = tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            tokio::net::TcpStream::connect(format!("127.0.0.1:{}", daemon_port))
+        ).await.is_ok_and(|res| res.is_ok());
+
+        if daemon_available {
+            debug!("Using daemon for caching on port {}", daemon_port);
+            Some(Box::new(crate::daemon::DaemonCacheClient::new(daemon_port)))
+        } else {
+            debug!("Daemon not found on port {}, using local sqlite cache", daemon_port);
+            Some(open_cache_db(&ai.config).await?)
+        }
     } else {
         None
     };

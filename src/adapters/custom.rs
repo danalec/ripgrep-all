@@ -142,7 +142,7 @@ lazy_static! {
             mimetypes: Some(strs(&["application/pdf"])),
 
             binary: "pdftotext".to_string(),
-            args: strs(&["-", "-"]),
+            args: strs(&["-opw", "$password", "-", "-"]),
             disabled_by_default: None,
             match_only_by_mime: None,
             output_path_hint: Some("${input_virtual_path}.txt.asciipagebreaks".into())
@@ -242,7 +242,7 @@ impl GetMetadata for CustomSpawningFileAdapter {
         &self.meta
     }
 }
-fn arg_replacer(arg: &str, filepath_hint: &Path) -> Result<String> {
+fn arg_replacer(arg: &str, filepath_hint: &Path, config: &RgaConfig) -> Result<String> {
     expand_str_ez(arg, |s| match s {
         "input_virtual_path" => Ok(filepath_hint.to_string_lossy()),
         "input_file_stem" => Ok(filepath_hint
@@ -253,6 +253,7 @@ fn arg_replacer(arg: &str, filepath_hint: &Path) -> Result<String> {
             .extension()
             .unwrap_or_default()
             .to_string_lossy()),
+        "password" => Ok(config.password.clone().unwrap_or_default().into()),
         e => Err(anyhow::format_err!("unknown replacer ${{{e}}}")),
     })
 }
@@ -260,12 +261,13 @@ impl CustomSpawningFileAdapter {
     fn command(
         &self,
         filepath_hint: &std::path::Path,
+        config: &RgaConfig,
         mut command: tokio::process::Command,
     ) -> Result<tokio::process::Command> {
         command.args(
             self.args
                 .iter()
-                .map(|arg| arg_replacer(arg, filepath_hint))
+                .map(|arg| arg_replacer(arg, filepath_hint, config))
                 .collect::<Result<Vec<_>>>()?,
         );
         log::debug!("running command {:?}", command);
@@ -291,7 +293,7 @@ impl FileAdapter for CustomSpawningFileAdapter {
 
         let cmd = Command::new(&self.binary);
         let cmd = self
-            .command(&filepath_hint, cmd)
+            .command(&filepath_hint, &config, cmd)
             .with_context(|| format!("Could not set cmd arguments for {}", self.binary))?;
         debug!("executing {:?}", cmd);
         let output = pipe_output(&line_prefix, cmd, inp, &self.binary, "")?;
@@ -301,6 +303,7 @@ impl FileAdapter for CustomSpawningFileAdapter {
                     .as_deref()
                     .unwrap_or("${input_virtual_path}.txt"),
                 &filepath_hint,
+                &config,
             )?),
             inp: output,
             line_prefix,

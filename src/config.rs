@@ -207,6 +207,15 @@ pub struct RgaConfig {
     #[clap(long = "rga-cache-prune", help = "Prune the cache (remove old or missing entries)")]
     pub cache_prune: bool,
 
+    #[serde(skip)] // CLI only
+    #[clap(long = "rga-daemon", help = "Start a persistent preprocessor daemon to speed up caching")]
+    pub daemon: bool,
+
+    /// Password for encrypted archives.
+    #[serde(default)]
+    #[clap(long = "rga-password", require_equals = true)]
+    pub password: Option<String>,
+
     /// Override file extensions for the built-in ZIP adapter.
     ///
     /// If set, replaces the default list ["zip","jar","xpi","kra","snagx"].
@@ -255,6 +264,7 @@ impl RgaConfig {
         self.postproc_binary_marker.hash(&mut s);
         self.postproc_page_prefix.hash(&mut s);
         self.postproc_page_include_empty.hash(&mut s);
+        self.password.hash(&mut s);
         // Include version to invalidate cache on updates
         env!("CARGO_PKG_VERSION").hash(&mut s);
         format!("{:016x}", s.finish())
@@ -263,6 +273,15 @@ impl RgaConfig {
 
 #[derive(Parser, Debug, Deserialize, Serialize, JsonSchema, Default, Clone, PartialEq)]
 pub struct CacheConfig {
+    /// Type of cache backend to use.
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[clap(
+        default_value = "sqlite",
+        long = "rga-cache-type",
+        require_equals = true
+    )]
+    pub cache_type: String,
+
     /// Disable caching of results.
     ///
     /// By default, rga caches the extracted text, if it is small enough, to a database.
@@ -311,6 +330,15 @@ pub struct CacheConfig {
         require_equals = true
     )]
     pub path: CachePath,
+
+    /// Port for the persistent preprocessor daemon.
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[clap(
+        default_value = "43210",
+        long = "rga-daemon-port",
+        require_equals = true
+    )]
+    pub daemon_port: u16,
 }
 
 static RGA_CONFIG: &str = "RGA_CONFIG";
@@ -454,6 +482,7 @@ where
         res.doctor = arg_matches.doctor;
         res.cache_clear = arg_matches.cache_clear;
         res.cache_prune = arg_matches.cache_prune;
+        res.daemon = arg_matches.daemon;
     }
     Ok(res)
 }

@@ -15,12 +15,22 @@ fn main() -> anyhow::Result<()> {
     env_logger::init();
     let args = Args::parse();
     let query = args.query;
-    let fname = args.fname;
+    let mut fname = args.fname;
+
+    let mut page = None;
+    if let Some(caps) = regex::Regex::new(r"Page (\d+): (.*)").unwrap().captures(&fname) {
+        page = Some(caps.get(1).unwrap().as_str().to_string());
+        fname = caps.get(2).unwrap().as_str().to_string();
+    }
 
     if fname.ends_with(".pdf") {
         use std::io::ErrorKind::*;
 
-        let worked = Command::new("evince")
+        let mut cmd = Command::new("evince");
+        if let Some(p) = page {
+            cmd.arg("--page-label").arg(p);
+        }
+        let worked = cmd
             .arg("--find")
             .arg(&query)
             .arg(&fname)
