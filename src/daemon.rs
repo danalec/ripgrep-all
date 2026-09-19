@@ -19,14 +19,13 @@ pub enum DaemonResponse {
     Error(String),
 }
 
-pub async fn run_daemon(path: &std::path::Path, port: u16) -> Result<()> {
+pub async fn run_daemon(config: &RgaConfig) -> Result<()> {
+    let port = config.cache.daemon_port;
     let addr = format!("127.0.0.1:{}", port);
     let listener = TcpListener::bind(&addr).await.context("Failed to bind to daemon address")?;
     info!("rga daemon listening on {}", addr);
 
-    let mut config = RgaConfig::default();
-    config.cache.path = crate::config::CachePath(path.to_string_lossy().to_string());
-    let cache = open_cache_db(&config).await?;
+    let cache = open_cache_db(config).await?;
     let cache = std::sync::Arc::new(tokio::sync::Mutex::new(cache));
 
     loop {

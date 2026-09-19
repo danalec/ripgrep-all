@@ -113,9 +113,7 @@ async fn main() -> anyhow::Result<()> {
         return clear_cache(&config);
     }
     if config.daemon {
-        let path = std::path::Path::new(&config.cache.path.0);
-        let port = config.cache.daemon_port;
-        rga::daemon::run_daemon(path, port).await?;
+        rga::daemon::run_daemon(&config).await?;
         return Ok(());
     }
 
