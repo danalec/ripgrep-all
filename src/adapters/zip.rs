@@ -101,7 +101,6 @@ impl FileAdapter for ZipAdapter {
         ai: AdaptInfo,
         _detection_reason: &FileMatcher,
     ) -> Result<AdaptedFilesIterBox> {
-        // let (s, r) = mpsc::channel(1);
         let AdaptInfo {
             inp,
             filepath_hint,
@@ -146,12 +145,13 @@ impl FileAdapter for ZipAdapter {
                     yield Ok(AdaptInfo {
                         filepath_hint: fname,
                         is_real_file: false,
+                        file_mtime_unix_ms: None,
                         inp: Box::pin(reader),
                         line_prefix: new_line_prefix,
                         archive_recursion_depth: archive_recursion_depth + 1,
                         postprocess,
                         config: config.clone(),
-                    });
+                        });
                 }
             };
 
@@ -189,6 +189,7 @@ impl FileAdapter for ZipAdapter {
                         yield Ok(AdaptInfo {
                             filepath_hint: fname,
                             is_real_file: false,
+                            file_mtime_unix_ms: None,
                             inp: Box::pin(reader),
                             line_prefix: new_line_prefix,
                             archive_recursion_depth: archive_recursion_depth + 1,
@@ -197,7 +198,6 @@ impl FileAdapter for ZipAdapter {
                         });
                         let entry = returned.await.context("ZIP entry reader did not return the archive input")?;
                         zip = entry.done().await.context("going to next file in zip but entry was not read fully")?;
-
                 }
                 trace!("zip over");
             };
@@ -206,43 +206,6 @@ impl FileAdapter for ZipAdapter {
         }
     }
 }
-
-/*struct ZipAdaptIter {
-    inp: AdaptInfo,
-}
-impl<'a> AdaptedFilesIter for ZipAdaptIter<'a> {
-    fn next<'b>(&'b mut self) -> Option<AdaptInfo<'b>> {
-        let line_prefix = &self.inp.line_prefix;
-        let filepath_hint = &self.inp.filepath_hint;
-        let archive_recursion_depth = &self.inp.archive_recursion_depth;
-        let postprocess = self.inp.postprocess;
-        ::zip::read::read_zipfile_from_stream(&mut self.inp.inp)
-            .unwrap()
-            .and_then(|file| {
-                if file.is_dir() {
-                    return None;
-                }
-                debug!(
-                    "{}{}|{}: {} ({} packed)",
-                    line_prefix,
-                    filepath_hint.to_string_lossy(),
-                    file.name(),
-                    print_bytes(file.size() as f64),
-                    print_bytes(file.compressed_size() as f64)
-                );
-                let line_prefix = format!("{}{}: ", line_prefix, file.name());
-                Some(AdaptInfo {
-                    filepath_hint: PathBuf::from(file.name()),
-                    is_real_file: false,
-                    inp: Box::new(file),
-                    line_prefix,
-                    archive_recursion_depth: archive_recursion_depth + 1,
-                    postprocess,
-                    config: RgaConfig::default(), //config.clone(),
-                })
-            })
-    }
-}*/
 
 #[cfg(test)]
 mod test {
@@ -471,7 +434,7 @@ mod test {
             let (mut ai, reason) =
                 simple_adapt_info(&path, Box::pin(std::io::Cursor::new(bytes.clone())));
             ai.is_real_file = is_real_file;
-            let output = adapted_to_vec(loop_adapt(&ZipAdapter::new(), reason, ai).await?).await?;
+            let output = adapted_to_vec(loop_adapt(&ZipAdapter::new(), reason, ai, crate::adapters::get_all_adapters(None).0).await?).await?;
             assert_eq!(
                 String::from_utf8(output)?,
                 "PREFIX:dir/first.txt: first\nPREFIX:second.txt: second\n"
@@ -492,7 +455,7 @@ mod test {
         let path = dir.path().join("corrupt.zip");
         tokio::fs::write(&path, bytes).await?;
         let (ai, reason) = simple_fs_adapt_info(&path).await?;
-        let result = adapted_to_vec(loop_adapt(&ZipAdapter::new(), reason, ai).await?).await;
+        let result = adapted_to_vec(loop_adapt(&ZipAdapter::new(), reason, ai, crate::adapters::get_all_adapters(None).0).await?).await;
         assert!(
             result.is_err(),
             "corrupted ZIP content must fail validation"
@@ -504,20 +467,10 @@ mod test {
     async fn only_seek_zip_fs() -> Result<()> {
         let zip = test_data_dir().join("only-seek-zip.zip");
         let (a, d) = simple_fs_adapt_info(&zip).await?;
-        let _v = adapted_to_vec(loop_adapt(&ZipAdapter::new(), d, a).await?).await?;
-        // assert_eq!(String::from_utf8(v)?, "");
-
+        let _v = adapted_to_vec(loop_adapt(&ZipAdapter::new(), d, a, crate::adapters::get_all_adapters(None).0).await?).await?;
         Ok(())
     }
-    /*#[tokio::test]
-    async fn only_seek_zip_mem() -> Result<()> {
-        let zip = test_data_dir().join("only-seek-zip.zip");
-        let (a, d) = simple_adapt_info(&zip, Box::pin(File::open(&zip).await?));
-        let v = adapted_to_vec(loop_adapt(&ZipAdapter::new(), d, a)?).await?;
-        // assert_eq!(String::from_utf8(v)?, "");
 
-        Ok(())
-    }*/
     #[tokio::test]
     async fn recurse() -> Result<()> {
         let zipfile = create_zip("outer.txt", "outer text file", true).await?;
@@ -527,7 +480,7 @@ mod test {
             &PathBuf::from("outer.zip"),
             Box::pin(std::io::Cursor::new(zipfile)),
         );
-        let buf = adapted_to_vec(loop_adapt(&adapter, d, a).await?).await?;
+        let buf = adapted_to_vec(loop_adapt(&adapter, d, a, crate::adapters::get_all_adapters(None).0).await?).await?;
 
         assert_eq!(
             String::from_utf8(buf)?,
