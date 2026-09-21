@@ -1,7 +1,7 @@
 # rga: ripgrep, but also search in PDFs, E-Books, Office documents, zip, tar.gz, etc.
 
 > **Community build.** This fork is maintained by [danalec](https://github.com/danalec).
-> The `scoop-alts` branch builds on upstream master with additional search
+> The `main` branch builds on upstream master (the `master` branch mirrors upstream) with additional search
 > capability and performance work, and publishes its own Windows builds
 > (see [releases](https://github.com/danalec/ripgrep-all/releases)). No pull
 > requests are opened against the upstream repository.
