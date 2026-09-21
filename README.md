@@ -1,5 +1,19 @@
 # rga: ripgrep, but also search in PDFs, E-Books, Office documents, zip, tar.gz, etc.
 
+> **Community build.** This fork is maintained by [danalec](https://github.com/danalec).
+> The `scoop-alts` branch builds on upstream master with additional search
+> capability and performance work, and publishes its own Windows builds
+> (see [releases](https://github.com/danalec/ripgrep-all/releases)). No pull
+> requests are opened against the upstream repository.
+> Upstream: [phiresky/ripgrep-all](https://github.com/phiresky/ripgrep-all).
+>
+> Additions on top of upstream so far: persistent cache daemon with password
+> support, tesseract OCR adapter (opt-in), rga-doctor and cache management
+> tools, unified ffmpeg streaming, configurable zip/ffmpeg extensions,
+> postproc page-break markers, legacy Word 97-2003 .doc search via antiword,
+> .rtf via pandoc, and a single-pass memchr-based line prefixer that is
+> about 35% faster on newline-dense text.
+
 rga is a line-oriented search tool that allows you to look for a regex in a multitude of file types. rga wraps the awesome [ripgrep] and enables it to search in pdf, docx, sqlite, jpg, movie subtitles (mkv, mp4), etc.
 
 [ripgrep]: https://github.com/BurntSushi/ripgrep
