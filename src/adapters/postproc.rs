@@ -131,14 +131,17 @@ async fn postproc_encoding(
 }
 
 /// Adds the given prefix to each line in an `AsyncRead`.
+///
+/// Single-pass scan: CRLF pairs are normalized to LF and every LF is
+/// followed by the line prefix, in one allocation per chunk. Chunks without
+/// any line break are forwarded without copying.
 pub fn postproc_prefix<T: AsyncRead + Send>(
     line_prefix: &str,
     inp: T,
 ) -> impl AsyncRead + Send + use<T> {
     let line_prefix_n = format!("\n{line_prefix}"); // clone since we need it later
     let line_prefix_o = Bytes::copy_from_slice(line_prefix.as_bytes());
-    let regex = regex::bytes::Regex::new("\n").unwrap();
-    let crlf = regex::bytes::Regex::new("\r\n").unwrap();
+    let line_prefix_rep = line_prefix_o.clone();
     let inp_stream = ReaderStream::new(inp);
     let oup_stream = stream! {
         yield Ok(line_prefix_o);
@@ -146,12 +149,50 @@ pub fn postproc_prefix<T: AsyncRead + Send>(
             match chunk {
                 Err(e) => yield Err(e),
                 Ok(chunk) => {
-                    let chunk = crlf.replace_all(&chunk, &b"\n"[..]);
-                    if chunk.contains(&b'\n') {
-                        yield Ok(Bytes::copy_from_slice(&regex.replace_all(&chunk, line_prefix_n.as_bytes())));
-                    } else {
-                        yield Ok(Bytes::copy_from_slice(&chunk));
+                    // fast path: no line breaks in this chunk at all
+                    if memchr::memchr2(b'\r', b'\n', &chunk).is_none() {
+                        yield Ok(chunk);
+                        continue;
                     }
+                    let bytes = chunk.as_ref();
+                    let mut out;
+                    if memchr::memchr(b'\r', bytes).is_none() {
+                        // common case: only LF breaks; count first so the
+                        // output buffer is allocated exactly once
+                        let n_lines = memchr::memchr_iter(b'\n', bytes).count();
+                        out = Vec::with_capacity(bytes.len() + line_prefix_rep.len() * n_lines);
+                        let mut i = 0;
+                        for pos in memchr::memchr_iter(b'\n', bytes) {
+                            out.extend_from_slice(&bytes[i..=pos]);
+                            out.extend_from_slice(&line_prefix_rep);
+                            i = pos + 1;
+                        }
+                        out.extend_from_slice(&bytes[i..]);
+                    } else {
+                        // rare case containing \r; single scalar pass that
+                        // keeps the previous chunk-local semantics: CRLF pairs
+                        // are normalized, a \r split from its \n by a chunk
+                        // boundary is kept as-is
+                        out = Vec::with_capacity(bytes.len() + line_prefix_n.len() * 4);
+                        let mut i = 0;
+                        while i < bytes.len() {
+                            match bytes[i] {
+                                b'\n' => {
+                                    out.extend_from_slice(line_prefix_n.as_bytes());
+                                    i += 1;
+                                }
+                                b'\r' if bytes.get(i + 1) == Some(&b'\n') => {
+                                    out.extend_from_slice(line_prefix_n.as_bytes());
+                                    i += 2;
+                                }
+                                b => {
+                                    out.push(b);
+                                    i += 1;
+                                }
+                            }
+                        }
+                    }
+                    yield Ok(Bytes::from(out));
                 }
             }
         }
@@ -333,6 +374,34 @@ PREFIX:Page 3:
         println!("{}", String::from_utf8_lossy(&output));
         assert!(res.is_ok());
         assert_eq!(output, b"prefix: Hello\nprefix: World");
+    }
+
+    #[tokio::test]
+    async fn test_postproc_prefix_crlf() {
+        let mut output: Vec<u8> = Vec::new();
+        // The "\r\n" split across the chunk boundary is processed per chunk
+        // (as in the previous regex implementation): the trailing lone \r of
+        // the first chunk is kept, and the \n of the second chunk gets the
+        // prefix. CRLF pairs within one chunk are normalized.
+        let mock: Mock = Builder::new()
+            .read(b"Hello\r\nWorld\r")
+            .read(b"\nSplit\r\nEnd")
+            .build();
+        let res = postproc_prefix("p: ", mock).read_to_end(&mut output).await;
+        println!("{}", String::from_utf8_lossy(&output));
+        assert!(res.is_ok());
+        assert_eq!(output, b"p: Hello\np: World\r\np: Split\np: End");
+    }
+
+    #[tokio::test]
+    async fn test_postproc_prefix_bare_cr_and_binary_safe() {
+        let mut output: Vec<u8> = Vec::new();
+        // lone \r kept as-is, \0 bytes pass through untouched
+        let mock: Mock = Builder::new().read(b"a\rb\0c\n").build();
+        let res = postproc_prefix("p: ", mock).read_to_end(&mut output).await;
+        println!("{}", String::from_utf8_lossy(&output));
+        assert!(res.is_ok());
+        assert_eq!(output, b"p: a\rb\0c\np: ");
     }
 
     async fn test_from_strs(

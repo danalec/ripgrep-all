@@ -117,7 +117,7 @@ lazy_static! {
             name: "pandoc".to_string(),
             description: "Uses pandoc to convert binary/unreadable text documents to plain markdown-like text".to_string(),
             version: 3,
-            extensions: strs(&["epub", "odt", "docx", "fb2", "ipynb", "html", "htm"]),
+            extensions: strs(&["epub", "odt", "docx", "fb2", "ipynb", "html", "htm", "rtf"]),
             binary: "pandoc".to_string(),
             mimetypes: None,
             // simpler markdown (with more information loss but plainer text)
@@ -388,6 +388,26 @@ PREFIX:Page 1: 1
 PREFIX:Page 1: 
 PREFIX:Page 1: 
 "
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pandoc_rtf() -> Result<()> {
+        let adapter = BUILTIN_SPAWNING_ADAPTERS
+            .iter()
+            .find(|e| e.name == "pandoc")
+            .expect("no pandoc adapter")
+            .to_adapter();
+        let rtf = br"{\rtf1\ansi{\fonttbl{\f0 Arial;}}\f0\pard Hello RTF fixture\par}";
+        let filepath = std::path::Path::new("test.rtf");
+        let (a, d) = simple_adapt_info(filepath, Box::pin(std::io::Cursor::new(rtf.as_slice())));
+        let r = loop_adapt(&adapter, d, a, crate::adapters::get_all_adapters(None).0).await?;
+        let o = adapted_to_vec(r).await?;
+        let text = String::from_utf8(o)?;
+        assert!(
+            text.contains("PREFIX:Hello RTF fixture"),
+            "unexpected output: {text:?}"
         );
         Ok(())
     }
