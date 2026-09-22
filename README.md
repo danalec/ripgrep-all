@@ -3,8 +3,9 @@
 > **Community build.** This fork is maintained by [danalec](https://github.com/danalec).
 > The `main` branch builds on upstream master (the `master` branch mirrors upstream) with additional search
 > capability and performance work, and publishes its own Windows builds
-> (see [releases](https://github.com/danalec/ripgrep-all/releases)). No pull
-> requests are opened against the upstream repository.
+> (see [releases](https://github.com/danalec/ripgrep-all/releases)). Improvements
+> developed here are also submitted upstream as pull requests — see
+> [upstream PRs by @danalec](https://github.com/phiresky/ripgrep-all/pulls?q=is%3Apr+author%3Adanalec).
 > Upstream: [phiresky/ripgrep-all](https://github.com/phiresky/ripgrep-all).
 >
 > Additions on top of upstream so far: persistent cache daemon with password
