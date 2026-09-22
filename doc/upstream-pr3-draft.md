@@ -1,28 +1,29 @@
 # Draft — upstream PR for issue #3 ("Idea: allow adapters to bail out")
 
-> Status: **DRAFT — não abrir ainda no GitHub.**
-> Abrir somente depois que a onda 1 de fixes tiver sido mergeada no upstream
-> (em particular a #352, que é pré-requisito de testes no Windows), para não
-> competir por atenção do mantenedor.
-> Branch da PR: `feat/adapter-bailout` — **já preparada** nos dois mirrors
-> (GitHub `danalec/ripgrep-all` e forgejo), com 2 commits atômicos sobre
+> Status: **DRAFT — do not open on GitHub yet.**
+> Open only after the first wave of fixes has been merged upstream
+> (in particular #352, which is a test prerequisite on Windows), to avoid
+> competing for the maintainer's attention.
+> PR branch: `feat/adapter-bailout` — **already prepared** on both mirrors
+> (GitHub `danalec/ripgrep-all` and forgejo), with 2 atomic commits on top of
 > `phiresky/ripgrep-all:master` (`8dabb3d` core + `d7e3d13` poppler,
-> squash do fix de whitespace-only output incluído), sem o community build.
-> Implementação de referência: `poc/adapter-bailout` (forgejo PR #1),
-> 3 commits (`5b3e05d`, `72715a0`, `5ce2a7f`), **40/40 testes verdes** e
-> e2e validado com PDF scanneado real.
+> with the whitespace-only fix squashed in), no community build content.
+> Reference implementation: `poc/adapter-bailout` (forgejo PR #1),
+> 3 commits (`5b3e05d`, `72715a0`, `5ce2a7f`), **40/40 tests green** and
+> e2e-validated with a real scanned PDF.
 
 ---
 
-## Título proposto
+## Proposed title
 
 ```
 feat: allow adapters to bail out and fall back to the next adapter
 ```
 
-(adicione `closes #3` no corpo, não no título, para não fechar a issue prematuramente se o PR for rejeitado)
+(add `closes #3` to the body, not the title, so the issue is not closed
+prematurely if the PR is rejected)
 
-## Corpo proposto
+## Proposed body
 
 ```markdown
 Implements the idea from #3: adapters get a way to decline a file *without*
@@ -50,8 +51,8 @@ result. Verified with a real image-only PDF.
 
 Custom adapters get a `bail_if_empty_output: bool` flag in their config. When
 set and the spawned program produces no text output for a real file, the
-adapter bails instead of returning empty output. Enabled for the built-in
-poppler adapter. The README documents an OCRmyPDF-based `pdf` override
+adapter bails instead of returning empty output. Enabled for the built-in poppler
+adapter. The README documents an OCRmyPDF-based `pdf` override
 recipe.
 
 "No text output" means the first chunk of stdout contains no bytes other
@@ -88,22 +89,24 @@ this branch is fully green on Windows (29/29).
 
 ---
 
-## Notas internas (não ir no corpo da PR)
+## Internal notes (not for the PR body)
 
-- **Ordem**: abrir só depois da onda 1 (#352–#359), **#352 primeiro** (a PR
-  já tem evidência do antes/depois 23→29 na descrição). Com a #352 mergeada:
-  `git fetch upstream && git rebase upstream/master` na `feat/adapter-bailout`
-  — ensaio já feito localmente (branch `rehearse/pr3-after-352`), rebase
-  limpo e 29/29.
-- **Branch**: NÃO precisa mais ser criada — `feat/adapter-bailout` já existe
-  nos dois mirrors com o fix de whitespace-only squashado em `d7e3d13`.
-  Histórico foi reescrito uma vez (force-push); se alguém mais tiver clones,
-  avisar.
-- **CI upstream**: vai cair no mesmo gate de aprovação de fork da onda 1.
-- **E2E validado**: PDF só-imagem real → poppler baila ("produced no text
-  output") → sem adapter restante, erro nomeia o poppler; com adapter OCR
-  custom configurado, o fallback entrega o texto (`rga` propaga o config
-  via env `RGA_CONFIG`; `rga-preproc` isolado não lê config file — isso é do
-  upstream, não muda nesta PR).
-- A issue #3 tem 0 comentários; o texto acima tenta ser autocontido para
-  facilitar a vida do mantenedor.
+- **Order**: open only after the first wave (#352–#359), **#352 first** (that
+  PR already carries the 23→29 before/after evidence in its description).
+  Once #352 is merged:
+  `git fetch upstream && git rebase upstream/master` on `feat/adapter-bailout`
+  — rehearsal already done locally (branch `rehearse/pr3-after-352`), rebase
+  is clean and 29/29.
+- **Branch**: does NOT need to be created anymore — `feat/adapter-bailout`
+  already exists on both mirrors with the whitespace-only fix squashed into
+  `d7e3d13`. History was rewritten once (force-push); if anyone else has
+  clones, let them know.
+- **Upstream CI**: will hit the same fork-approval gate as the first wave.
+- **E2E validated**: a real image-only PDF → poppler bails ("produced no
+  text output") → with no adapter left, the error names poppler; with a
+  custom OCR adapter configured, the fallback delivers the text (`rga`
+  propagates config via the `RGA_CONFIG` env var; standalone `rga-preproc`
+  does not read the config file — that is upstream behavior, unchanged by
+  this PR).
+- Issue #3 has 0 comments; the text above aims to be self-contained to make
+  the maintainer's life easy.
