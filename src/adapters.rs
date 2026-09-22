@@ -85,11 +85,48 @@ pub trait FileAdapter: GetMetadata + Send + Sync {
     /// adapt a file.
     ///
     /// detection_reason is the Matcher that was used to identify this file. Unless --rga-accurate was given, it is always a FastMatcher
+    ///
+    /// Return [`adapter_bail`] to decline handling this file *without* failing
+    /// the whole pipeline: rga will re-run adapter matching with this adapter
+    /// excluded and give the next matching adapter a chance (issue #3).
     async fn adapt(
         &self,
         a: AdaptInfo,
         detection_reason: &FileMatcher,
     ) -> Result<AdaptedFilesIterBox>;
+}
+
+/// Marker error an adapter can return from [`FileAdapter::adapt`] to decline
+/// handling a file without failing the whole pipeline.
+///
+/// When an adapter bails, rga re-runs adapter matching with that adapter
+/// excluded, so the next matching adapter gets a chance. This enables e.g.
+/// poppler (pdftotext) to bail on a PDF that has no text layer so an OCR
+/// adapter can take over instead (<https://github.com/phiresky/ripgrep-all/issues/3>).
+///
+/// Limitations:
+/// - Only real files on disk can be retried: `AdaptInfo.inp` is consumed by
+///   the time a bail is observed, so rga re-opens `filepath_hint`. A bail on
+///   a file inside an archive is a hard error.
+/// - The bailing adapter must not depend on getting the original input
+///   stream back (adapters running external tools on the file path are fine).
+#[derive(Debug)]
+pub struct AdapterBail {
+    pub reason: String,
+}
+impl std::fmt::Display for AdapterBail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "adapter bailed: {}", self.reason)
+    }
+}
+impl std::error::Error for AdapterBail {}
+
+/// Construct an [`anyhow::Error`] that [`rga_preproc`](crate::preproc::rga_preproc)
+/// interprets as "this adapter declines the file, try the next one".
+pub fn adapter_bail(reason: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(AdapterBail {
+        reason: reason.into(),
+    })
 }
 
 pub struct AdaptInfo {
@@ -301,6 +338,7 @@ mod test {
             binary: "cat".to_string(),
             args: vec![],
             output_path_hint: None,
+            bail_if_empty_output: None,
         }
     }
 
