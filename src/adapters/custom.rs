@@ -74,9 +74,13 @@ pub struct CustomAdapterConfig {
     pub output_path_hint: Option<String>,
 
     /// If true, the adapter declines the file (bails out, see issue #3) when the
-    /// spawned program produces no output at all — e.g. pdftotext on a PDF that
-    /// consists only of scanned images. Another adapter (such as a user-configured
-    /// OCR adapter matching the same extension) then gets a chance to handle it.
+    /// spawned program produces no text output — e.g. pdftotext on a PDF that
+    /// consists only of scanned images, which emits nothing but form-feed page
+    /// separators. Another adapter (such as a user-configured OCR adapter
+    /// matching the same extension) then gets a chance to handle it.
+    ///
+    /// "No text output" means the first chunk of output contains no bytes other
+    /// than ASCII whitespace and control characters (<= 0x20 or 0x7F).
     ///
     /// Only effective for real files on disk; inside archives a bail is a hard error.
     pub bail_if_empty_output: Option<bool>,
@@ -393,17 +397,17 @@ impl FileAdapter for CustomSpawningFileAdapter {
 }
 
 enum PeekOutcome {
-    /// the program produced no output at all; decline the file (issue #3)
+    /// the program produced no text output; decline the file (issue #3)
     Bailed { reason: String },
     Output(ReadBox),
 }
 
 impl CustomSpawningFileAdapter {
     /// like `pipe_output`, but reads the first chunk of the child's stdout
-    /// before deciding: if the program produced no output at all (e.g.
-    /// pdftotext on a PDF without a text layer), bail so the next adapter
-    /// (e.g. OCR) can handle the file. The consumed first chunk is prepended
-    /// to the returned stream.
+    /// before deciding: if the program produced no text output (e.g.
+    /// pdftotext on a PDF without a text layer, which emits only form-feed
+    /// page separators), bail so the next adapter (e.g. OCR) can handle the
+    /// file. The consumed first chunk is prepended to the returned stream.
     async fn spawn_peek_empty(&self, mut cmd: Command, inp: ReadBox) -> Result<PeekOutcome> {
         let cmd_log = format!("{:?}", cmd); // todo: perf
         let mut child = cmd
@@ -426,17 +430,33 @@ impl CustomSpawningFileAdapter {
             std::io::Result::Ok(())
         });
 
+        // collect the first chunk of output to decide whether the program
+        // produced any text at all. pdftotext on an image-only PDF emits a
+        // lone form-feed per page rather than zero bytes, so "empty" here
+        // means "no bytes other than ASCII whitespace/control". reads may be
+        // partial, so keep filling the chunk until text appears or it is full.
         let mut first = vec![0u8; 4096];
-        let n = stdo.read(&mut first).await?;
-        if n == 0 {
+        let mut filled = 0;
+        let mut has_text = false;
+        while filled < first.len() && !has_text {
+            let n = stdo.read(&mut first[filled..]).await?;
+            if n == 0 {
+                break;
+            }
+            has_text = first[filled..filled + n]
+                .iter()
+                .any(|&b| b > 0x20 && b != 0x7f);
+            filled += n;
+        }
+        if filled == 0 || !has_text {
             // reap the child so it does not linger, then decline the file
             let _ = child.wait().await;
             return Ok(PeekOutcome::Bailed {
-                reason: format!("{} produced no output", self.binary),
+                reason: format!("{} produced no text output", self.binary),
             });
         }
         Ok(PeekOutcome::Output(Box::pin(
-            std::io::Cursor::new(first[..n].to_vec())
+            std::io::Cursor::new(first[..filled].to_vec())
                 .chain(stdo)
                 .chain(proc_wait(child, move || format!("subprocess: {cmd_log}")))
                 .chain(join_handle_to_stream(join)),
@@ -725,6 +745,59 @@ PREFIX:Page 1:
         assert!(
             text.contains("peeked-output"),
             "expected the adapter output to pass through, got: {text:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bail_on_whitespace_only_output() -> Result<()> {
+        use crate::config::RgaConfig;
+        // pdftotext on an image-only PDF emits only form-feed page separators
+        // (no bytes other than ASCII whitespace/control), which must count as
+        // "no output" for the bail — otherwise the fallback never triggers
+        // for real scanned PDFs.
+        #[cfg(windows)]
+        let (bin, args) = ("cmd", vec!["/c".to_string(), "echo.".to_string()]);
+        #[cfg(unix)]
+        let (bin, args) = ("echo", vec![String::new()]);
+
+        let adapter = CustomAdapterConfig {
+            name: "ffonly".to_string(),
+            description: "test adapter".to_string(),
+            disabled_by_default: None,
+            version: 1,
+            extensions: vec!["ffonlyext".to_string()],
+            mimetypes: None,
+            match_only_by_mime: None,
+            binary: bin.to_string(),
+            args,
+            output_path_hint: None,
+            bail_if_empty_output: Some(true),
+        }
+        .to_adapter();
+
+        let filepath = std::env::temp_dir().join("rga-bail-ffonly.ffonlyext");
+        tokio::fs::write(&filepath, b"dummy content").await?;
+        let ai = AdaptInfo {
+            filepath_hint: filepath.clone(),
+            is_real_file: true,
+            archive_recursion_depth: 0,
+            inp: Box::pin(File::open(&filepath).await?),
+            line_prefix: String::new(),
+            postprocess: false,
+            config: RgaConfig::default(),
+            file_mtime_unix_ms: None,
+        };
+        let detection = FileMatcher::Fast(FastFileMatcher::FileExtension("ffonlyext".to_string()));
+        let err = match adapter.adapt(ai, &detection).await {
+            std::result::Result::Ok(_) => panic!("expected a bail on whitespace-only output"),
+            Err(e) => e,
+        };
+        tokio::fs::remove_file(&filepath).await.ok();
+        assert!(
+            err.chain()
+                .any(|cause| cause.downcast_ref::<crate::adapters::AdapterBail>().is_some()),
+            "expected an AdapterBail, got: {err:?}"
         );
         Ok(())
     }
