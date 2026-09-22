@@ -275,6 +275,38 @@ The config file location leverage the mechanisms defined by
 - the [Standard Directories](https://developer.apple.com/library/content/documentation/FileManagement/Conceptual/FileSystemProgrammingGuide/FileSystemOverview/FileSystemOverview.html#//apple_ref/doc/uid/TP40010672-CH2-SW6)
   guidelines on macOS (ex: `~/Library/Application Support/ripgrep-all/config.jsonc`)
 
+### Adapter Fallback (bail-out)
+Adapters can decline a file at runtime and let the next matching adapter handle
+it instead of failing the whole search. This is what enables OCR workflows:
+the built-in `poppler` adapter is configured with `bail_if_empty_output`, so
+when `pdftotext` produces no text at all (e.g. a scanned PDF without a text
+layer), rga re-runs adapter matching and gives the file to any other adapter
+you configured for `pdf` — typically an OCR tool:
+
+```jsonc
+{
+  "custom_adapters": [
+    {
+      "name": "pdf-ocr",
+      "description": "OCR for scanned PDFs via OCRmyPDF",
+      "version": 1,
+      "extensions": ["pdf"],
+      "binary": "ocrmypdf",
+      "args": ["--skip-text", "-l", "eng", "-", "-"],
+      "output_path_hint": "${input_virtual_path}.txt"
+    }
+  ]
+}
+```
+
+Notes:
+- `bail_if_empty_output` is a per-adapter flag for custom adapters: when the
+  spawned program outputs nothing for a real file, the adapter bails.
+- Fallback only works for real files on disk; for files inside archives the
+  input stream cannot be rewound, so a bail there is a hard error.
+- If every candidate adapter bails, rga reports which adapters bailed instead
+  of silently returning nothing.
+
 
 ## Development
 
