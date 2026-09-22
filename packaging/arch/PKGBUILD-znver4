@@ -1,8 +1,8 @@
 # Maintainer: danalec
-pkgname=ripgrep-all
+pkgname=ripgrep-all-znver4
 pkgver=0.10.10.3
 pkgrel=1
-pkgdesc="rga: ripgrep, but also search in PDFs, E-Books, Office documents, zip, tar.gz, etc. (community build)"
+pkgdesc="rga: ripgrep, but also search in PDFs, E-Books, Office documents, zip, tar.gz, etc. (community build, znver4)"
 arch=('x86_64')
 url='https://github.com/danalec/ripgrep-all'
 license=('AGPL-3.0-or-later')
@@ -14,12 +14,11 @@ optdepends=(
   'ffmpeg: for the ffmpeg adapter'
   'pandoc: for the pandoc adapter'
   'poppler: for the poppler adapter'
-  'tesseract: for the OCR image adapter (opt-in)'
-)
-conflicts=('ripgrep-all-bin' 'ripgrep-all-znver4')
+  'tesseract: for the OCR image adapter (opt-in)')
+conflicts=('ripgrep-all' 'ripgrep-all-bin')
 options=('!debug')
 source=(
-  "${pkgname}-${pkgver}.tar.gz::https://github.com/danalec/ripgrep-all/archive/refs/tags/v${pkgver}.tar.gz"
+  "ripgrep-all-${pkgver}.tar.gz::https://github.com/danalec/ripgrep-all/archive/refs/tags/v${pkgver}.tar.gz"
 )
 # Updated after the tag is pushed (the tarball hash cannot be known before).
 sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
@@ -33,6 +32,8 @@ build() {
   cd ripgrep-all-${pkgver}
   export LIBSQLITE3_SYS_USE_PKG_CONFIG=1
   export ZSTD_SYS_USE_PKG_CONFIG=1
+  # Zen 4+ (znver4) tuned build: AVX-512 capable codegen, fat LTO, single CGU.
+  export RUSTFLAGS="-C target-cpu=znver4"
   export CARGO_PROFILE_RELEASE_DEBUG=false
   export CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=off
   export CARGO_PROFILE_RELEASE_LTO=fat
@@ -44,6 +45,7 @@ check() {
   cd ripgrep-all-${pkgver}
   export LIBSQLITE3_SYS_USE_PKG_CONFIG=1
   export ZSTD_SYS_USE_PKG_CONFIG=1
+  export RUSTFLAGS="-C target-cpu=znver4"
   cargo test --frozen --all-features
 }
 

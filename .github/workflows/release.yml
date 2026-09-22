@@ -83,28 +83,41 @@ jobs:
             rust: nightly
             target: x86_64-unknown-linux-musl
             strip: x86_64-linux-musl-strip
+            suffix: ""
+          - build: linux
+            os: ubuntu-22.04
+            rust: nightly
+            target: x86_64-unknown-linux-gnu
+            strip: x86_64-linux-gnu-strip
+            suffix: "-znver4"
+            znver4: true
           - build: linux
             os: ubuntu-22.04
             rust: nightly
             target: arm-unknown-linux-gnueabihf
             strip: arm-linux-gnueabihf-strip
+            suffix: ""
           - build: linux
             os: ubuntu-22.04
             rust: nightly
             target: aarch64-unknown-linux-gnu
             strip: aarch64-linux-gnu-strip
+            suffix: ""
           - build: macos
             os: macos-latest
             rust: nightly
             target: x86_64-apple-darwin
+            suffix: ""
           - build: macos
             os: macos-latest
             rust: nightly
             target: aarch64-apple-darwin
+            suffix: ""
           - build: win
             os: windows-2025
             rust: nightly
             target: x86_64-pc-windows-msvc
+            suffix: ""
           #- build: win
           #  os: windows-2019
           #  rust: nightly-x86_64-gnu
@@ -142,11 +155,26 @@ jobs:
           echo "TARGET_FLAGS=--target ${{ matrix.target }}" >> $GITHUB_ENV
           echo "TARGET_DIR=./target/${{ matrix.target }}" >> $GITHUB_ENV
 
+      - name: Zen 4 tuning (Arch/CachyOS znver4)
+        if: matrix.znver4
+        shell: bash
+        run: |
+          # Same recipe as packaging/arch PKGBUILD znver4 variant:
+          # AVX-512 capable codegen, fat LTO, single codegen unit.
+          echo "RUSTFLAGS=-C target-cpu=znver4" >> $GITHUB_ENV
+          echo 'EXTRA_CARGO_ARGS=--config profile.release.lto="fat" --config profile.release.codegen-units=1 --config profile.release.debug=false --config profile.release.split-debuginfo="off"' >> $GITHUB_ENV
+
+      - name: No target-specific tuning
+        if: ${{ !matrix.znver4 }}
+        shell: bash
+        run: echo "EXTRA_CARGO_ARGS=" >> $GITHUB_ENV
+
       - name: Show command used for Cargo
         run: |
           echo "cargo command is: ${{ env.CARGO }}"
           echo "target flag is: ${{ env.TARGET_FLAGS }}"
           echo "target dir is: ${{ env.TARGET_DIR }}"
+          echo "extra args are: ${{ env.EXTRA_CARGO_ARGS }}"
 
       - name: Get release download URL
         uses: actions/download-artifact@v4
@@ -163,7 +191,7 @@ jobs:
           echo "release version: $RELEASE_VERSION"
 
       - name: Build release binary
-        run: ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }}
+        run: ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }} ${{ env.EXTRA_CARGO_ARGS }}
 
       - name: Strip release binary (macos)
         if: matrix.build == 'macos'
@@ -188,7 +216,7 @@ jobs:
       - name: Build archive
         shell: bash
         run: |
-          staging="ripgrep_all-${{ env.RELEASE_VERSION }}-${{ matrix.target }}"
+          staging="ripgrep_all-${{ env.RELEASE_VERSION }}-${{ matrix.target }}${{ matrix.suffix }}"
           mkdir -p "$staging"/doc
 
           cp {README.md,LICENSE.md} "$staging/"

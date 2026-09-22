@@ -1,23 +1,29 @@
-ripgrep-all community build 0.10.10.1
+ripgrep-all community build 0.10.10.3
 
-A Windows build of [ripgrep-all](https://github.com/phiresky/ripgrep-all) based on upstream master (after v0.10.9) with additional search capability and performance work. This is not an official rga release. The binaries are built from source with a statically linked C runtime, so no Visual C++ redistributable is needed.
+A Windows/Linux/macOS build of [ripgrep-all](https://github.com/phiresky/ripgrep-all) based on upstream master (after v0.10.9) with additional search capability and performance work. This is not an official rga release. The Windows binaries are built from source with a statically linked C runtime, so no Visual C++ redistributable is needed.
 
-## New
+## New in 0.10.10.3
 
-- **Search legacy Word 97-2003 .doc files.** A new antiword adapter extracts text from old OLE2 .doc files, both standalone and inside archives (members are spooled to a temporary file since antiword only reads seekable paths). Matched by the .doc extension or by the application/msword mime type with `--rga-accurate`. Requires antiword.
-- **Search .rtf files.** The pandoc adapter now also converts RTF to plain text. Requires pandoc.
+- **Whitespace-only adapter bail-out.** Adapters whose entire output is whitespace (e.g. OCR-style form feeds from scanned PDFs with no text layer) are now discarded instead of flooding results with blank lines. This is the groundwork discussed in upstream issue #3.
+- **Clustered `-a` detection for `rg -a/--text/--binary`.** Passing `-ai` (or any cluster of boolean short flags containing `a`) now correctly enables binary passthrough, while value-taking clusters like `-ta` (type filter) are not misread. The cache key now also includes the text flag, so toggling it invalidates cached results.
+- **Linux x86-64 Zen 4 (znver4) binary.** New `ripgrep_all-<version>-x86_64-unknown-linux-gnu-znver4.tar.gz` release asset, built with the same recipe as the Arch/CachyOS `ripgrep-all-znver4` pacman package (`-C target-cpu=znver4`, fat LTO, single codegen unit). Requires a Zen 4+ (or Intel equivalent AVX-512) CPU.
+- **Arch / CachyOS pacman packages** for the generic x86-64 and znver4 variants, built from `packaging/arch` (`PKGBUILD`, `PKGBUILD-znver4`, `build-packages.sh`).
+- Linux arm64 (`aarch64-unknown-linux-gnu`) binary continues to be shipped.
 
-## Faster
+## Previously in 0.10.10.2
 
-- **Line prefixing is about 35% faster** on newline-dense text (about 1.25 to 1.7 GiB/s in the bench-postproc workload). The prefixer now does a single memchr-guided pass per chunk with an exactly-sized output buffer, instead of two regex replacement passes, and chunks without any line break are forwarded without copying. Behavior is unchanged, including chunk-local CRLF handling.
+Ten upstream corrections plus community features:
 
-## Also included from the community branch
-
-- Persistent cache daemon (rga --daemon) with password support for encrypted archives
-- Tesseract OCR adapter for images (opt-in)
-- rga-doctor and cache clear/prune tools
-- Unified ffmpeg streaming and configurable zip/ffmpeg extensions
-- Cache keys include config hash and file mtime
+- fix(adapters): force LF line endings from pdftotext and pandoc on Windows (#352)
+- fix(sqlite): open databases with immutable=1 to avoid -wal/-shm side effects (#287)
+- fix(pandoc): map file extensions through pandoc format aliases for --from= (#205)
+- fix(ffmpeg): strip LRC timestamps from lyrics metadata tags (#293)
+- fix(rga-fzf): report correct error when fzf prints no output (#264)
+- fix(matching): fall back to ZIP magic bytes when mime detection fails (#214)
+- docs(readme): require Rust 1.85+ for compilation from source (#342)
+- feat: honor rg's -a/--text/--binary flag for binary detection (#70)
+- feat: custom adapters with the same name as a built-in now override it (#232)
+- fix(rga-fzf): file names starting with '-' broke the preview command (#261)
 
 ## Requirements
 
