@@ -55,7 +55,7 @@ impl FileAdapter for PostprocPrefix {
         let marker = a.config.postproc_binary_marker.clone().unwrap_or("[rga: binary data]".to_string());
         let read = add_newline(postproc_prefix(
             &a.line_prefix,
-            postproc_encoding(&a.line_prefix, a.inp, &marker).await?,
+            postproc_encoding(&a.line_prefix, a.inp, &marker, a.config.text).await?,
         ));
         // keep adapt info (filename etc) except replace inp
         let ai = AdaptInfo {
@@ -79,11 +79,13 @@ impl Read for ReadErr {
 /**
  * Detects and converts encodings other than utf-8 to utf-8.
  * If the input stream does not contain valid text, returns the string `[rga: binary data]` instead
+ * (unless `allow_binary` is set, i.e. rg's -a/--text/--binary was passed).
  */
 async fn postproc_encoding(
     _line_prefix: &str,
     inp: Pin<Box<dyn AsyncRead + Send>>,
     binary_marker: &str,
+    allow_binary: bool,
 ) -> Result<Pin<Box<dyn AsyncRead + Send>>> {
     // check for binary content in first 8kB
     // read the first 8kB into a buffer, check for null bytes, then return the buffer concatenated with the rest of the file
@@ -91,7 +93,7 @@ async fn postproc_encoding(
     let mut beginning = inp.take(1 << 13);
 
     beginning.read_to_end(&mut fourk).await?;
-    let has_binary = fourk.contains(&0u8);
+    let has_binary = !allow_binary && fourk.contains(&0u8);
 
     let enc = Encoding::for_bom(&fourk);
     let inp = Cursor::new(fourk).chain(beginning.into_inner());
@@ -230,7 +232,7 @@ impl FileAdapter for PostprocPageBreaks {
         let marker = a.config.postproc_binary_marker.clone().unwrap_or("[rga: binary data]".to_string());
         let prefix = a.config.postproc_page_prefix.clone().unwrap_or("Page ".to_string());
         let include_empty = a.config.postproc_page_include_empty.unwrap_or(true);
-        let read = postproc_pagebreaks(postproc_encoding(&a.line_prefix, a.inp, &marker).await?, prefix, include_empty);
+        let read = postproc_pagebreaks(postproc_encoding(&a.line_prefix, a.inp, &marker, a.config.text).await?, prefix, include_empty);
         // keep adapt info (filename etc) except replace inp
         let ai = AdaptInfo {
             inp: Box::pin(read),
@@ -421,7 +423,7 @@ PREFIX:Page 3:
     ) -> Result<()> {
         let mut oup = Vec::new();
         let inp = Box::pin(Cursor::new(a));
-        let inp = postproc_encoding("", inp, "[rga: binary data]").await?;
+        let inp = postproc_encoding("", inp, "[rga: binary data]", false).await?;
         if pagebreaks {
             postproc_pagebreaks(inp, "Page ".to_string(), true).read_to_end(&mut oup).await?;
         } else {
@@ -484,6 +486,20 @@ PREFIX:Page 3:
         )
         .await?;
         test_from_strs(false, "foo:", "\0", "foo:[rga: binary data]").await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_binary_content_allowed() -> Result<()> {
+        // rg's -a/--text/--binary: binary content is passed through unmodified
+        // https://github.com/phiresky/ripgrep-all/issues/70
+        let mut oup = Vec::new();
+        let inp = Box::pin(Cursor::new(&b"this is a test \0 foo"[..]));
+        let inp = postproc_encoding("", inp, "[rga: binary data]", true).await?;
+        let x = postproc_prefix("foo:", inp);
+        pin!(x);
+        x.read_to_end(&mut oup).await?;
+        assert_eq!(String::from_utf8_lossy(&oup), "foo:this is a test \0 foo");
         Ok(())
     }
 

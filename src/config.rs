@@ -136,6 +136,15 @@ pub struct RgaConfig {
     )]
     pub adapters: Vec<String>,
 
+    /// Same as rg's `-a` / `--text` flag: search binary data as if it were text.
+    ///
+    /// By default, rga replaces content it detects as binary with "[rga: binary data]".
+    /// This is set automatically when `-a`, `--text` or `--binary` is passed through to rg,
+    /// and can also be set in the config file to search binary content by default.
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[structopt(skip)] // parsed from the passthrough args, not an rga flag
+    pub text: bool,
+
     #[serde(default, skip_serializing_if = "is_default")]
     #[clap(flatten)]
     pub cache: CacheConfig,
@@ -512,12 +521,29 @@ pub fn split_args(is_rga_preproc: bool) -> Result<(RgaConfig, Vec<OsString>)> {
             }
         });
     debug!("rga (our) args: {:?}", our_args);
-    let matches = parse_args(our_args, is_rga_preproc).context("Could not parse config")?;
+    let mut matches = parse_args(our_args, is_rga_preproc).context("Could not parse config")?;
     if matches.rg_help {
         passthrough_args.insert(0, "--help".into());
     }
     if matches.rg_version {
         passthrough_args.insert(0, "--version".into());
+    }
+    // Honor rg's -a/--text/--binary: rga's own binary detection in postproc would
+    // otherwise replace binary content with "[rga: binary data]" even though the
+    // user explicitly asked to search it.
+    // https://github.com/phiresky/ripgrep-all/issues/70
+    if !is_rga_preproc
+        && passthrough_args
+            .iter()
+            .any(|arg| matches!(arg.to_str(), Some("-a") | Some("--text") | Some("--binary")))
+    {
+        matches.text = true;
+        // parse_args() has already passed the merged config on to rga-preproc
+        // via the RGA_CONFIG env variable, so update it with the new value.
+        // (skipped fields are CLI-only and not needed by rga-preproc)
+        let merged = serde_json::to_string(&serde_json::to_value(&matches)?)?;
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(RGA_CONFIG, merged) };
     }
     debug!("rga (passthrough) args: {:?}", passthrough_args);
     Ok((matches, passthrough_args))

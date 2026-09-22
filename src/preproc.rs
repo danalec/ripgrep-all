@@ -52,7 +52,21 @@ async fn choose_adapter(
         if buf.starts_with(b"From \x0d") || buf.starts_with(b"From -") {
             Some("application/mbox")
         } else {
-            let mimetype = infer::get(buf).map(|t| t.mime_type());
+            let detected = infer::get(buf).map(|t| t.mime_type());
+            // infer sometimes fails to detect archives (reporting
+            // application/octet-stream), which breaks --rga-accurate matching.
+            // Fall back to checking the ZIP magic bytes directly.
+            // https://github.com/phiresky/ripgrep-all/issues/214
+            let mimetype = match detected {
+                Some("application/octet-stream")
+                    if buf.starts_with(b"PK\x03\x04")
+                        || buf.starts_with(b"PK\x05\x06")
+                        || buf.starts_with(b"PK\x07\x08") =>
+                {
+                    Some("application/zip")
+                }
+                other => other,
+            };
             debug!("mimetype: {:?}", mimetype);
             mimetype
         }

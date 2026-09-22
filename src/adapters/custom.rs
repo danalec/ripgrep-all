@@ -56,6 +56,8 @@ pub struct CustomAdapterConfig {
     /// The arguments to run the program with.
     /// Placeholders:
     /// - `$input_file_extension`: the file extension (without dot). e.g. foo.tar.gz -> gz
+    /// - `$input_file_pandoc_format`: like `$input_file_extension`, but with pandoc-style
+    ///   extension aliases applied (e.g. `htm` -> `html`), for use with pandoc's `--from=`
     /// - `$input_file_stem`: the file name without the last extension. e.g. foo.tar.gz -> foo.tar
     /// - `$input_virtual_path`: the full input file path.
     ///   Note that this path may not actually exist on disk because it is the result of another adapter.
@@ -116,17 +118,20 @@ lazy_static! {
         CustomAdapterConfig {
             name: "pandoc".to_string(),
             description: "Uses pandoc to convert binary/unreadable text documents to plain markdown-like text".to_string(),
-            version: 3,
+            version: 5,
             extensions: strs(&["epub", "odt", "docx", "fb2", "ipynb", "html", "htm", "rtf"]),
             binary: "pandoc".to_string(),
             mimetypes: None,
             // simpler markdown (with more information loss but plainer text)
             //.arg("--to=commonmark-header_attributes-link_attributes-fenced_divs-markdown_in_html_blocks-raw_html-native_divs-native_spans-bracketed_spans")
             args: strs(&[
-                "--from=$input_file_extension",
+                "--from=$input_file_pandoc_format",
                 "--to=plain",
                 "--wrap=none",
-                "--markdown-headings=atx"
+                "--markdown-headings=atx",
+                // pandoc 3.x uses the platform's native line ending (CRLF on Windows);
+                // force LF so adapter output is consistent across platforms
+                "--eol=lf"
             ]),
             disabled_by_default: None,
             match_only_by_mime: None,
@@ -134,7 +139,7 @@ lazy_static! {
         },
         CustomAdapterConfig {
             name: "poppler".to_owned(),
-            version: 1,
+            version: 2,
             description: "Uses pdftotext (from poppler-utils) to extract plain text from PDF files"
                 .to_owned(),
 
@@ -142,7 +147,10 @@ lazy_static! {
             mimetypes: Some(strs(&["application/pdf"])),
 
             binary: "pdftotext".to_string(),
-            args: strs(&["-opw", "$password", "-", "-"]),
+            // -eol unix: poppler builds on Windows default to \r\n line endings,
+            // which would leak \r into the pagebreak postprocessing and its tests.
+            // -opw $password: pass the configured password to encrypted PDFs.
+            args: strs(&["-eol", "unix", "-opw", "$password", "-", "-"]),
             disabled_by_default: None,
             match_only_by_mime: None,
             output_path_hint: Some("${input_virtual_path}.txt.asciipagebreaks".into())
@@ -243,6 +251,22 @@ impl GetMetadata for CustomSpawningFileAdapter {
     }
 }
 fn arg_replacer(arg: &str, filepath_hint: &Path, config: &RgaConfig) -> Result<String> {
+    // pandoc's FormatHeuristics extension aliases, for the extensions rga hands to pandoc.
+    // Without this, `--from=htm` fails with "Unknown input format htm".
+    // https://github.com/jgm/pandoc/blob/master/src/Text/Pandoc/App/FormatHeuristics.hs
+    fn pandoc_format_alias(ext: &str) -> String {
+        match ext.to_ascii_lowercase().as_str() {
+            "htm" | "xhtml" => "html",
+            "adoc" => "asciidoc",
+            "text" | "txt" => "markdown",
+            "lhs" => "markdown+lhs",
+            "texi" => "texinfo",
+            "tei.xml" => "tei",
+            "wiki" => "mediawiki",
+            _ => ext,
+        }
+        .to_owned()
+    }
     expand_str_ez(arg, |s| match s {
         "input_virtual_path" => Ok(filepath_hint.to_string_lossy()),
         "input_file_stem" => Ok(filepath_hint
@@ -254,6 +278,12 @@ fn arg_replacer(arg: &str, filepath_hint: &Path, config: &RgaConfig) -> Result<S
             .unwrap_or_default()
             .to_string_lossy()),
         "password" => Ok(config.password.clone().unwrap_or_default().into()),
+        "input_file_pandoc_format" => Ok(std::borrow::Cow::Owned(
+            filepath_hint
+                .extension()
+                .map(|e| pandoc_format_alias(&e.to_string_lossy()))
+                .unwrap_or_default(),
+        )),
         e => Err(anyhow::format_err!("unknown replacer ${{{e}}}")),
     })
 }
@@ -368,6 +398,40 @@ mod test {
     use anyhow::Result;
     use pretty_assertions::assert_eq;
     use tokio::fs::File;
+
+    #[test]
+    fn pandoc_from_format_alias() -> Result<()> {
+        // https://github.com/phiresky/ripgrep-all/issues/205
+        // pandoc rejects "--from=htm" ("Unknown input format htm"), so the extension
+        // must be mapped through pandoc's own FormatHeuristics aliases.
+        let adapter = CustomAdapterConfig {
+            name: "pandoc".to_string(),
+            description: "test".to_string(),
+            disabled_by_default: None,
+            version: 1,
+            extensions: vec!["html".to_string(), "htm".to_string()],
+            mimetypes: None,
+            match_only_by_mime: None,
+            binary: "pandoc".to_string(),
+            args: vec!["--from=$input_file_pandoc_format".to_string()],
+            output_path_hint: None,
+        }
+        .to_adapter();
+        for (file, expected) in [
+            ("page.htm", "--from=html"),
+            ("page.html", "--from=html"),
+            ("page.docx", "--from=docx"),
+            ("page.HTM", "--from=html"),
+        ] {
+            let cmd = adapter.command(Path::new(file), &RgaConfig::default(), Command::new("pandoc"))?;
+            let debug = format!("{:?}", cmd);
+            assert!(
+                debug.contains(expected),
+                "command for {file} should contain {expected:?}, got: {debug}"
+            );
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn poppler() -> Result<()> {
