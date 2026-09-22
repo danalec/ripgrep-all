@@ -2,12 +2,15 @@
 
 > Status: **DRAFT — não abrir ainda no GitHub.**
 > Abrir somente depois que a onda 1 de fixes tiver sido mergeada no upstream
-> (ou pelo menos avaliada), para não competir por atenção do mantenedor.
-> Branch alvo da PR: uma branch atômica `feat/adapter-bailout` rebased sobre
-> `phiresky/ripgrep-all:master` contendo apenas os commits
-> `5b3e05d` + `72715a0` (sem o community build).
-> Implementação de referência já validada: `poc/adapter-bailout` (forgejo PR #1),
-> 33 testes passando.
+> (em particular a #352, que é pré-requisito de testes no Windows), para não
+> competir por atenção do mantenedor.
+> Branch da PR: `feat/adapter-bailout` — **já preparada** nos dois mirrors
+> (GitHub `danalec/ripgrep-all` e forgejo), com 2 commits atômicos sobre
+> `phiresky/ripgrep-all:master` (`8dabb3d` core + `d7e3d13` poppler,
+> squash do fix de whitespace-only output incluído), sem o community build.
+> Implementação de referência: `poc/adapter-bailout` (forgejo PR #1),
+> 3 commits (`5b3e05d`, `72715a0`, `5ce2a7f`), **40/40 testes verdes** e
+> e2e validado com PDF scanneado real.
 
 ---
 
@@ -29,7 +32,7 @@ The motivating example from #3 works end to end: when poppler (pdftotext)
 extracts no text from a PDF (e.g. a scan without a text layer), the poppler
 adapter bails, matching re-runs with poppler excluded, and an OCR adapter
 (e.g. tesseract / OCRmyPDF) takes over instead of the user getting an empty
-result.
+result. Verified with a real image-only PDF.
 
 ## How it works
 
@@ -46,9 +49,16 @@ result.
 ## New adapter capability: bail_if_empty_output
 
 Custom adapters get a `bail_if_empty_output: bool` flag in their config. When
-set and the spawned program produces no output for a real file, the adapter
-bails instead of returning empty output. Enabled for the built-in poppler
-adapter. The README documents an OCRmyPDF-based `pdf` override recipe.
+set and the spawned program produces no text output for a real file, the
+adapter bails instead of returning empty output. Enabled for the built-in
+poppler adapter. The README documents an OCRmyPDF-based `pdf` override
+recipe.
+
+"No text output" means the first chunk of stdout contains no bytes other
+than ASCII whitespace/control (<= 0x20 or 0x7F). This matters in practice:
+`pdftotext` on an image-only PDF emits a lone form-feed page separator per
+page rather than zero bytes, so a zero-byte check would never fire for real
+scans.
 
 Also: tolerate a closed stdin pipe when feeding the child's stdin — a tool
 that never reads stdin (e.g. `echo`) is not a conversion failure, and a
@@ -65,28 +75,35 @@ archives.
 ## Tests
 
 - fallback to a second adapter after a bail
-- no bail when output is non-empty
+- no bail when output has text (peeked chunk is not dropped)
+- bail on whitespace-only output (the real scanned-PDF case)
 - error (not a hang) when every matching adapter bailed
-- archive-member bail is a hard error
 
 ## Relation to other open PRs
 
-Independent of all currently open fix PRs; touches `src/adapters.rs`,
-`src/preproc.rs`, `src/adapters/custom.rs` and README. Will be rebased as
-needed.
+Builds on #352 (Windows LF normalization): without it, five pre-existing
+PDF fixture tests fail on Windows regardless of this PR. With #352 merged,
+this branch is fully green on Windows (29/29).
 ```
 
 ---
 
 ## Notas internas (não ir no corpo da PR)
 
-- **Ordem**: abrir só depois da onda 1 (#352–#359). Se alguma delas tocar
-  `src/adapters.rs`/`custom.rs` no mesmo trecho, rebasar antes.
-- **Branch**: criar `feat/adapter-bailout` a partir de `upstream/master` com
-  cherry-pick de `5b3e05d` + `72715a0`. Cuidado: esses commits foram escritos
-  sobre o community build — se o cherry-pick conflitar em imports
-  (`preproc.rs` diverge do upstream por causa de daemon/antiword etc.), a
-  versão upstream precisa ser reconstruída manualmente sobre o master limpo.
+- **Ordem**: abrir só depois da onda 1 (#352–#359), **#352 primeiro** (a PR
+  já tem evidência do antes/depois 23→29 na descrição). Com a #352 mergeada:
+  `git fetch upstream && git rebase upstream/master` na `feat/adapter-bailout`
+  — ensaio já feito localmente (branch `rehearse/pr3-after-352`), rebase
+  limpo e 29/29.
+- **Branch**: NÃO precisa mais ser criada — `feat/adapter-bailout` já existe
+  nos dois mirrors com o fix de whitespace-only squashado em `d7e3d13`.
+  Histórico foi reescrito uma vez (force-push); se alguém mais tiver clones,
+  avisar.
 - **CI upstream**: vai cair no mesmo gate de aprovação de fork da onda 1.
+- **E2E validado**: PDF só-imagem real → poppler baila ("produced no text
+  output") → sem adapter restante, erro nomeia o poppler; com adapter OCR
+  custom configurado, o fallback entrega o texto (`rga` propaga o config
+  via env `RGA_CONFIG`; `rga-preproc` isolado não lê config file — isso é do
+  upstream, não muda nesta PR).
 - A issue #3 tem 0 comentários; o texto acima tenta ser autocontido para
   facilitar a vida do mantenedor.
