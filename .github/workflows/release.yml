@@ -129,7 +129,7 @@ jobs:
             rust: nightly
             target: aarch64-pc-windows-msvc
             suffix: ""
-            cross: false
+            native: true
           #- build: win
           #  os: windows-2019
           #  rust: nightly-x86_64-gnu
@@ -160,7 +160,7 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Use Cross
-        if: ${{ matrix.cross != false }}
+        if: ${{ !matrix.native }}
         shell: bash
         run: |
           cargo install cross
@@ -169,7 +169,7 @@ jobs:
           echo "TARGET_DIR=./target/${{ matrix.target }}" >> $GITHUB_ENV
 
       - name: Use native Cargo
-        if: ${{ matrix.cross == false }}
+        if: ${{ matrix.native }}
         shell: bash
         run: |
           echo "TARGET_FLAGS=--target ${{ matrix.target }}" >> $GITHUB_ENV
