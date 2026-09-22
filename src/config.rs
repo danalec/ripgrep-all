@@ -1,4 +1,4 @@
-﻿use crate::{adapters::custom::CustomAdapterConfig, project_dirs};
+use crate::{adapters::custom::CustomAdapterConfig, project_dirs};
 use anyhow::{Context, Result};
 use derive_more::FromStr;
 use log::*;
@@ -274,6 +274,7 @@ impl RgaConfig {
         self.postproc_page_prefix.hash(&mut s);
         self.postproc_page_include_empty.hash(&mut s);
         self.password.hash(&mut s);
+        self.text.hash(&mut s);
         // Include version to invalidate cache on updates
         env!("CARGO_PKG_VERSION").hash(&mut s);
         format!("{:016x}", s.finish())
@@ -496,6 +497,41 @@ where
     Ok(res)
 }
 
+/// rg short flags that do not take a value and may be clustered with other
+/// boolean short flags. Shorts that take a value (-A -B -C -d -E -e -f -g
+/// -j -m -M -r -t -T) are excluded so a cluster like `-ta` (type filter "a")
+/// is not misread as `-t -a`.
+const RG_BOOL_SHORTS: &[u8] = b"abcFhiIlnNoPqsuvVwxzSU";
+
+/// Returns true if rg's passthrough args ask for binary data to be treated
+/// as text (`-a` / `--text` / `--binary`), including `-a` clustered with
+/// other boolean short flags (e.g. `rg -ai`). Args after `--` are positional
+/// and ignored. Non-unicode args (only possible filenames) are ignored.
+fn passthrough_requests_text(args: &[OsString]) -> bool {
+    for arg in args {
+        let s = match arg.to_str() {
+            Some(s) => s,
+            None => continue,
+        };
+        match s {
+            "--" => return false, // end of options
+            "-a" | "--text" | "--binary" => return true,
+            _ => {
+                let bytes = s.as_bytes();
+                if bytes.len() > 1
+                    && bytes[0] == b'-'
+                    && bytes[1] != b'-' // not a long flag
+                    && bytes[1..].contains(&b'a')
+                    && bytes[1..].iter().all(|b| RG_BOOL_SHORTS.contains(b))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Split arguments into the ones we care about and the ones rg cares about
 pub fn split_args(is_rga_preproc: bool) -> Result<(RgaConfig, Vec<OsString>)> {
     // let _app = RgaConfig::command();
@@ -532,11 +568,7 @@ pub fn split_args(is_rga_preproc: bool) -> Result<(RgaConfig, Vec<OsString>)> {
     // otherwise replace binary content with "[rga: binary data]" even though the
     // user explicitly asked to search it.
     // https://github.com/phiresky/ripgrep-all/issues/70
-    if !is_rga_preproc
-        && passthrough_args
-            .iter()
-            .any(|arg| matches!(arg.to_str(), Some("-a") | Some("--text") | Some("--binary")))
-    {
+    if !is_rga_preproc && passthrough_requests_text(&passthrough_args) {
         matches.text = true;
         // parse_args() has already passed the merged config on to rga-preproc
         // via the RGA_CONFIG env variable, so update it with the new value.
@@ -549,3 +581,53 @@ pub fn split_args(is_rga_preproc: bool) -> Result<(RgaConfig, Vec<OsString>)> {
     Ok((matches, passthrough_args))
 }
 
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn os(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn text_flag_exact_forms() {
+        for args in [&["-a"][..], &["--text"][..], &["--binary"][..]] {
+            assert!(passthrough_requests_text(&os(args)), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn text_flag_clustered_with_boolean_shorts() {
+        // rg allows clustering boolean short flags: -ai == -a -i
+        for args in [&["-ai"][..], &["-Sia"][..], &["-Fxa"][..]] {
+            assert!(passthrough_requests_text(&os(args)), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn text_flag_not_misparsed_in_value_clusters() {
+        // -t/-e/-g take values: "-ta" is the type filter "a", not -t -a
+        for args in [&["-ta"][..], &["-ea"][..], &["-ga"][..], &["-t", "a"][..]] {
+            assert!(!passthrough_requests_text(&os(args)), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn text_flag_absent_and_after_double_dash() {
+        assert!(!passthrough_requests_text(&os(&["-i", "pat", "file.pdf"])));
+        assert!(!passthrough_requests_text(&os(&["-S"])));
+        // after "--" everything is positional, even something that looks like -a
+        assert!(!passthrough_requests_text(&os(&["--", "-a"])));
+        assert!(passthrough_requests_text(&os(&["-a", "--", "pat"])));
+    }
+
+    #[test]
+    fn text_flag_serde_default_from_config_file() {
+        // the config file option is plain serde: absent means false
+        let cfg: RgaConfig = serde_json::from_str("{}").unwrap();
+        assert!(!cfg.text);
+        let cfg: RgaConfig = serde_json::from_str(r#"{"text": true}"#).unwrap();
+        assert!(cfg.text);
+    }
+}
