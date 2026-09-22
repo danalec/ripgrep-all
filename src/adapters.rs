@@ -112,11 +112,6 @@ type AdaptersTuple = (Vec<Arc<dyn FileAdapter>>, Vec<Arc<dyn FileAdapter>>);
 pub fn get_all_adapters(custom_adapters: Option<Vec<CustomAdapterConfig>>) -> AdaptersTuple {
     // order in descending priority
     let mut adapters: Vec<Arc<dyn FileAdapter>> = vec![];
-    if let Some(custom_adapters) = custom_adapters {
-        for adapter_config in custom_adapters {
-            adapters.push(Arc::new(adapter_config.to_adapter()));
-        }
-    }
 
     let internal_adapters: Vec<Arc<dyn FileAdapter>> = vec![
         Arc::new(PostprocPageBreaks::default()),
@@ -133,6 +128,24 @@ pub fn get_all_adapters(custom_adapters: Option<Vec<CustomAdapterConfig>>) -> Ad
             .map(|e| -> Arc<dyn FileAdapter> { Arc::new(e.to_adapter()) }),
     );
     adapters.extend(internal_adapters);
+
+    if let Some(custom_adapters) = custom_adapters {
+        for adapter_config in custom_adapters {
+            let adapter = Arc::new(adapter_config.to_adapter()) as Arc<dyn FileAdapter>;
+            // a custom adapter with the same name as a built-in one overrides it
+            // (e.g. to change the arguments passed to pdftotext), instead of
+            // producing a "found multiple adapters" conflict.
+            // https://github.com/phiresky/ripgrep-all/issues/232
+            if let Some(inx) = adapters
+                .iter()
+                .position(|a| a.metadata().name == adapter.metadata().name)
+            {
+                adapters[inx] = adapter;
+            } else {
+                adapters.insert(0, adapter);
+            }
+        }
+    }
 
     adapters
         .into_iter()
@@ -213,4 +226,54 @@ pub fn get_adapters_filtered<T: AsRef<str>>(
             .join(",")
     );
     Ok(adapters)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::adapters::custom::CustomAdapterConfig;
+
+    fn custom_adapter(name: &str, extensions: &[&str]) -> CustomAdapterConfig {
+        CustomAdapterConfig {
+            name: name.to_string(),
+            description: "test adapter".to_string(),
+            disabled_by_default: None,
+            version: 1,
+            extensions: extensions.iter().map(|e| e.to_string()).collect(),
+            mimetypes: None,
+            match_only_by_mime: None,
+            binary: "cat".to_string(),
+            args: vec![],
+            output_path_hint: None,
+        }
+    }
+
+    #[test]
+    fn custom_adapter_overrides_builtin_with_same_name() {
+        // https://github.com/phiresky/ripgrep-all/issues/232
+        let custom = Some(vec![custom_adapter("poppler", &["pdf"])]);
+        let (enabled, _) = get_all_adapters(custom);
+        let popplers: Vec<_> = enabled
+            .iter()
+            .filter(|a| a.metadata().name == "poppler")
+            .collect();
+        assert_eq!(
+            popplers.len(),
+            1,
+            "custom adapter named like a builtin must replace it, not conflict"
+        );
+        assert!(
+            popplers[0]
+                .metadata()
+                .description
+                .contains("test adapter")
+        );
+    }
+
+    #[test]
+    fn custom_adapter_with_new_name_has_priority() {
+        let custom = Some(vec![custom_adapter("myadapter", &["foo"])]);
+        let (enabled, _) = get_all_adapters(custom);
+        assert!(enabled.iter().any(|a| a.metadata().name == "myadapter"));
+    }
 }
