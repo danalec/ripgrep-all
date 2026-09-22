@@ -23,6 +23,13 @@ build_variant() {
   cp "$HERE/$pkgbuild" "$scratch/PKGBUILD"
   # shellcheck disable=SC2164
   cd "$scratch"
+  # The sha256 of the release tarball only exists once the tag does, so
+  # refresh the checksums here (pacman-contrib) instead of failing on a
+  # stale value. Skipped silently when updpkgsums is not installed.
+  if command -v updpkgsums >/dev/null 2>&1; then
+    echo "==> Refreshing source checksums for $variant"
+    updpkgsums
+  fi
   echo "==> Building $variant (pkgver $PKGVER)"
   makepkg -s --noconfirm
   cp ./*.pkg.tar.zst "$DIST/"
