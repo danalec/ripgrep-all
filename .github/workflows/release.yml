@@ -76,6 +76,7 @@ jobs:
       # Emit backtraces on panics.
       RUST_BACKTRACE: 1
     strategy:
+      fail-fast: false
       matrix:
         include:
           - build: linux
@@ -89,8 +90,26 @@ jobs:
             rust: nightly
             target: x86_64-unknown-linux-gnu
             strip: strip
+            suffix: ""
+          - build: linux
+            os: ubuntu-22.04
+            rust: nightly
+            target: x86_64-unknown-linux-gnu
+            strip: strip
             suffix: "-znver4"
             znver4: true
+          - build: linux
+            os: ubuntu-22.04
+            rust: nightly
+            target: aarch64-unknown-linux-gnu
+            strip: aarch64-linux-gnu-strip
+            suffix: ""
+          - build: linux
+            os: ubuntu-22.04
+            rust: nightly
+            target: aarch64-unknown-linux-musl
+            strip: aarch64-linux-musl-strip
+            suffix: ""
           - build: linux
             os: ubuntu-22.04
             rust: nightly
@@ -100,8 +119,14 @@ jobs:
           - build: linux
             os: ubuntu-22.04
             rust: nightly
-            target: aarch64-unknown-linux-gnu
-            strip: aarch64-linux-gnu-strip
+            target: armv7-unknown-linux-gnueabihf
+            strip: arm-linux-gnueabihf-strip
+            suffix: ""
+          - build: linux
+            os: ubuntu-22.04
+            rust: nightly
+            target: riscv64gc-unknown-linux-gnu
+            strip: riscv64-linux-gnu-strip
             suffix: ""
           - build: macos
             os: macos-latest
@@ -124,6 +149,12 @@ jobs:
             target: x86_64-pc-windows-msvc
             suffix: "-znver4"
             znver4: true
+          - build: win
+            os: windows-2025
+            rust: nightly
+            target: i686-pc-windows-msvc
+            suffix: ""
+            native: true
           - build: win
             os: windows-11-arm
             rust: nightly
