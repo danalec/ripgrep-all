@@ -118,6 +118,12 @@ jobs:
             rust: nightly
             target: x86_64-pc-windows-msvc
             suffix: ""
+          - build: win
+            os: windows-2025
+            rust: nightly
+            target: x86_64-pc-windows-msvc
+            suffix: "-znver4"
+            znver4: true
           #- build: win
           #  os: windows-2019
           #  rust: nightly-x86_64-gnu

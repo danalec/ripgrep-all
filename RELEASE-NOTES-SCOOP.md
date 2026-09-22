@@ -7,6 +7,7 @@ A Windows/Linux/macOS build of [ripgrep-all](https://github.com/phiresky/ripgrep
 - **Whitespace-only adapter bail-out.** Adapters whose entire output is whitespace (e.g. OCR-style form feeds from scanned PDFs with no text layer) are now discarded instead of flooding results with blank lines. This is the groundwork discussed in upstream issue #3.
 - **Clustered `-a` detection for `rg -a/--text/--binary`.** Passing `-ai` (or any cluster of boolean short flags containing `a`) now correctly enables binary passthrough, while value-taking clusters like `-ta` (type filter) are not misread. The cache key now also includes the text flag, so toggling it invalidates cached results.
 - **Linux x86-64 Zen 4 (znver4) binary.** New `ripgrep_all-<version>-x86_64-unknown-linux-gnu-znver4.tar.gz` release asset, built with the same recipe as the Arch/CachyOS `ripgrep-all-znver4` pacman package (`-C target-cpu=znver4`, fat LTO, single codegen unit). Requires a Zen 4+ (or Intel equivalent AVX-512) CPU.
+- **Windows x86-64 Zen 4 (znver4) binary.** New `ripgrep_all-<version>-x86_64-pc-windows-msvc-znver4.zip` release asset, same tuning; requires a Zen 4+ CPU. Available in scoop as `ripgrep-all-znver4` from the scoop-alts bucket.
 - **Arch / CachyOS pacman packages** for the generic x86-64 and znver4 variants, built from `packaging/arch` (`PKGBUILD`, `PKGBUILD-znver4`, `build-packages.sh`).
 - Linux arm64 (`aarch64-unknown-linux-gnu`) binary continues to be shipped.
 
