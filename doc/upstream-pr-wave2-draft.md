@@ -33,12 +33,32 @@ rga replaces content it detects as binary with `[rga: binary data]`, even
 when the user passes `-a`/`--text`/`--binary` to rg — so binary content
 inside archives could never actually be searched.
 
-Detect those flags in the passthrough args and skip the binary
+Detect those flags in the passthrough args — including `-a` clustered
+with other boolean short flags like `-ai` — and skip the binary
 replacement in that case. Also expose the same switch as a `text` config
 file option so it can be set persistently.
 
-Touches `src/adapters/postproc.rs` (skip binary replacement when text
-mode is on) and `src/config.rs` (flag detection + `text` option).
+Two details that make this actually usable:
+
+- **cache correctness**: the preproc cache key only distinguished
+  postprocess on/off (hardcoded hashes), so a cached
+  `[rga: binary data]` result would be served for a later `-a` search
+  and vice versa. The config hash now includes the text flag.
+- standalone `rga-preproc` reads config from the `RGA_CONFIG` env var
+  only, so `split_args` re-exports the updated config after detecting
+  the flag.
+
+Touches `src/adapters/postproc.rs` (skip binary replacement),
+`src/config.rs` (flag detection + `text` option) and
+`src/preproc_cache.rs` (config hash).
+
+## Tests
+
+- flag detection: exact forms (`-a`, `--text`, `--binary`), clustered
+  boolean shorts (`-ai`, `-Sia`), value-taking shorts not misparsed
+  (`-ta` is the type filter "a"), `--` terminator
+- postproc passes binary content through when text mode is on
+- cache key changes when the text flag flips
 
 ## Relation to other open PRs
 
@@ -99,8 +119,12 @@ adapter keeping its priority.
   rebase is expected even if some wave 1 PRs merge first. The exception
   would be a wave 1 change to `get_all_adapters`/`get_adapters_filtered`
   — check before opening.
-- `feat/70-honor-rg-text-flag` ships **no new tests** (postproc binary
-  replacement is only covered indirectly). Before opening, consider a
-  small unit test for the flag detection (`-a`/`--text`/`--binary` in
-  passthrough args → `text: true`), or state the manual test plan in the
-  PR body. `feat/232-adapter-override` does include tests (2 new).
+- `feat/70-honor-rg-text-flag` was **rewritten once** (old `38ea739` →
+  `ab6eb9d`): it now ships 7 new tests (flag detection incl. clustered
+  shorts, postproc passthrough, cache-key semantics), a real fix for the
+  cache key not including the text flag (found by e2e: a cached
+  `[rga: binary data]` result was served for a `-a` search), the
+  duplicated-trailer cleanup, and clustered-short detection (`-ai`).
+  E2E verified with cache enabled: no-flag → binary replaced; `-a` →
+  binary searchable (hit not served from stale cache); no-flag again →
+  no leak. `feat/232-adapter-override` untouched (already had tests).
