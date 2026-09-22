@@ -62,7 +62,7 @@ Examples:
 
 Linux x64, macOS and Windows binaries are available [in GitHub Releases][latestrelease].
 
-[latestrelease]: https://github.com/phiresky/ripgrep-all/releases/latest
+[latestrelease]: https://github.com/danalec/ripgrep-all/releases/latest
 
 ### Linux
 
