@@ -30,6 +30,7 @@ async fn choose_adapter(
     config: &RgaConfig,
     filepath_hint: &Path,
     archive_recursion_depth: i32,
+    exclude_adapters: &[String],
     inp: &mut (impl AsyncBufRead + Unpin),
     active_adapters: Option<&ActiveAdapters>,
 ) -> Result<Option<(Arc<dyn FileAdapter>, FileMatcher, ActiveAdapters)>> {
@@ -37,7 +38,11 @@ async fn choose_adapter(
     let active_adapters = match active_adapters {
         Some(a) => a,
         None => {
-            computed_adapters = get_adapters_filtered(config.custom_adapters.clone(), &config.adapters, config)?;
+            computed_adapters = get_adapters_filtered(config.custom_adapters.clone(), &config.adapters, config)?
+                .into_iter()
+                // adapters that already bailed out on this file must not be chosen again (issue #3)
+                .filter(|a| !exclude_adapters.iter().any(|x| x == &a.metadata().name))
+                .collect();
             &computed_adapters
         }
     };
@@ -84,7 +89,7 @@ enum Ret {
     Recurse(AdaptInfo, Arc<dyn FileAdapter>, FileMatcher, ActiveAdapters),
     Passthrough(AdaptInfo),
 }
-async fn buf_choose_adapter(ai: AdaptInfo, active_adapters: Option<&ActiveAdapters>) -> Result<Ret> {
+async fn buf_choose_adapter(ai: AdaptInfo, exclude_adapters: &[String], active_adapters: Option<&ActiveAdapters>) -> Result<Ret> {
     // Only use a buffer if we need to detect mime types (accurate mode)
     // or if it's a real file (where buffering helps performance).
     // For files already in memory or from other streams, a large buffer might be redundant.
@@ -94,6 +99,7 @@ async fn buf_choose_adapter(ai: AdaptInfo, active_adapters: Option<&ActiveAdapte
         &ai.config,
         &ai.filepath_hint,
         ai.archive_recursion_depth,
+        exclude_adapters,
         &mut inp,
         active_adapters,
     )
@@ -109,6 +115,13 @@ async fn buf_choose_adapter(ai: AdaptInfo, active_adapters: Option<&ActiveAdapte
             // otherwise it should have been filtered out by rg pre-glob since rg can handle those better than us
             let allow_cat = !ai.is_real_file || ai.config.accurate;
             if allow_cat {
+                if !exclude_adapters.is_empty() {
+                    eprintln!(
+                        "rga: no adapter left for '{}' after adapter(s) {} bailed — passing raw content through",
+                        ai.filepath_hint.to_string_lossy(),
+                        exclude_adapters.join(", ")
+                    );
+                }
                 if ai.postprocess {
                     (
                         Arc::new(PostprocPrefix {}) as Arc<dyn FileAdapter>,
@@ -119,11 +132,20 @@ async fn buf_choose_adapter(ai: AdaptInfo, active_adapters: Option<&ActiveAdapte
                     return Ok(Ret::Passthrough(ai));
                 }
             } else {
+                let after_bail = if exclude_adapters.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " after adapter(s) {} bailed out",
+                        exclude_adapters.join(", ")
+                    )
+                };
                 return Err(format_err!(
-                    "No adapter found for file {:?}, passthrough disabled.",
+                    "No adapter found for file {:?}{}, passthrough disabled.",
                     ai.filepath_hint
                         .file_name()
-                        .ok_or_else(|| format_err!("Empty filename"))?
+                        .ok_or_else(|| format_err!("Empty filename"))?,
+                    after_bail
                 ));
             }
         }
@@ -140,18 +162,87 @@ async fn buf_choose_adapter(ai: AdaptInfo, active_adapters: Option<&ActiveAdapte
 pub async fn rga_preproc(ai: AdaptInfo) -> Result<ReadBox> {
     debug!("path (hint) to preprocess: {:?}", ai.filepath_hint);
 
-    // todo: figure out when using a bufreader is a good idea and when it is not
-    // seems to be good for File::open() reads, but not sure about within archives (tar, zip)
-    let (ai, adapter, detection_reason, active_adapters) = match buf_choose_adapter(ai, None).await? {
-        Ret::Recurse(ai, a, b, c) => (ai, a, b, c),
-        Ret::Passthrough(ai) => {
-            return Ok(ai.inp);
+    // Destructure so we can rebuild AdaptInfo with a fresh input stream when an
+    // adapter bails (ai.inp is consumed by the adapter, but real files can be re-opened).
+    let AdaptInfo {
+        filepath_hint,
+        is_real_file,
+        archive_recursion_depth,
+        inp,
+        line_prefix,
+        postprocess,
+        config,
+        file_mtime_unix_ms,
+    } = ai;
+    let mut inp: ReadBox = inp;
+
+    // Adapters that bailed out and must be excluded when re-matching (issue #3).
+    let mut excluded: Vec<String> = Vec::new();
+    loop {
+        // todo: figure out when using a bufreader is a good idea and when it is not
+        // seems to be good for File::open() reads, but not sure about within archives (tar, zip)
+        let ai = AdaptInfo {
+            filepath_hint: filepath_hint.clone(),
+            is_real_file,
+            archive_recursion_depth,
+            inp,
+            line_prefix: line_prefix.clone(),
+            postprocess,
+            config: config.clone(),
+            file_mtime_unix_ms,
+        };
+        match buf_choose_adapter(ai, &excluded, None).await? {
+            Ret::Passthrough(ai) => return Ok(ai.inp),
+            Ret::Recurse(ai, adapter, detection_reason, active_adapters) => {
+                let adapter_name = adapter.metadata().name.clone();
+                let path_hint_copy = ai.filepath_hint.clone();
+                match adapt_caching(ai, adapter, detection_reason, active_adapters).await {
+                    std::result::Result::Ok(read_box) => return Ok(read_box),
+                    Err(e) => {
+                        let bail_reason = e
+                            .chain()
+                            .find_map(|cause| cause.downcast_ref::<AdapterBail>())
+                            .map(|b| b.reason.clone());
+                        match bail_reason {
+                            Some(reason) => {
+                                excluded.push(adapter_name.clone());
+                                if !is_real_file {
+                                    return Err(e).with_context(|| {
+                                        format!(
+                                            "adapter '{}' bailed on '{}' inside an archive (input stream cannot be rewound)",
+                                            adapter_name,
+                                            path_hint_copy.to_string_lossy()
+                                        )
+                                    });
+                                }
+                                eprintln!(
+                                    "rga: adapter '{}' bailed on '{}' ({}) — trying next adapter",
+                                    adapter_name,
+                                    path_hint_copy.to_string_lossy(),
+                                    reason
+                                );
+                                inp = Box::pin(
+                                    tokio::fs::File::open(&path_hint_copy)
+                                        .await
+                                        .with_context(|| {
+                                            format!(
+                                                "re-opening '{}' after adapter bail",
+                                                path_hint_copy.to_string_lossy()
+                                            )
+                                        })?,
+                                );
+                            }
+                            None => {
+                                return Err(e).with_context(|| {
+                                    format!("run_adapter({})", path_hint_copy.to_string_lossy())
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
-    };
-    let path_hint_copy = ai.filepath_hint.clone();
-    adapt_caching(ai, adapter, detection_reason, active_adapters)
-        .await
-        .with_context(|| format!("run_adapter({})", path_hint_copy.to_string_lossy()))
+    }
 }
 
 async fn adapt_caching(
@@ -304,7 +395,7 @@ pub async fn loop_adapt_inner(
     let s = stream! {
         for await file in inp {
             trace!("next file");
-            match buf_choose_adapter(file?, Some(&active_adapters)).await? {
+            match buf_choose_adapter(file?, &[], Some(&active_adapters)).await? {
                 Ret::Recurse(ai, adapter, detection_reason, _active_adapters) => {
                     if ai.archive_recursion_depth >= ai.config.max_archive_recursion.0 {
                         // some adapters (esp. zip) assume that the entry is read fully and might hang otherwise

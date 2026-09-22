@@ -72,6 +72,18 @@ pub struct CustomAdapterConfig {
     ///
     /// Setting this is useful if the output format is not plain text (.txt) but instead some other format that should be passed to another adapter
     pub output_path_hint: Option<String>,
+
+    /// If true, the adapter declines the file (bails out, see issue #3) when the
+    /// spawned program produces no text output — e.g. pdftotext on a PDF that
+    /// consists only of scanned images, which emits nothing but form-feed page
+    /// separators. Another adapter (such as a user-configured OCR adapter
+    /// matching the same extension) then gets a chance to handle it.
+    ///
+    /// "No text output" means the first chunk of output contains no bytes other
+    /// than ASCII whitespace and control characters (<= 0x20 or 0x7F).
+    ///
+    /// Only effective for real files on disk; inside archives a bail is a hard error.
+    pub bail_if_empty_output: Option<bool>,
 }
 
 fn strs(arr: &[&str]) -> Vec<String> {
@@ -135,7 +147,8 @@ lazy_static! {
             ]),
             disabled_by_default: None,
             match_only_by_mime: None,
-            output_path_hint: None
+            output_path_hint: None,
+            bail_if_empty_output: None,
         },
         CustomAdapterConfig {
             name: "poppler".to_owned(),
@@ -153,7 +166,10 @@ lazy_static! {
             args: strs(&["-eol", "unix", "-opw", "$password", "-", "-"]),
             disabled_by_default: None,
             match_only_by_mime: None,
-            output_path_hint: Some("${input_virtual_path}.txt.asciipagebreaks".into())
+            output_path_hint: Some("${input_virtual_path}.txt.asciipagebreaks".into()),
+            // PDF without a text layer -> pdftotext outputs nothing -> bail so
+            // a user-configured OCR adapter for .pdf can take over (issue #3)
+            bail_if_empty_output: Some(true),
         },
         CustomAdapterConfig {
             name: "tesseract".to_owned(),
@@ -165,7 +181,8 @@ lazy_static! {
             args: strs(&["stdin", "stdout"]),
             disabled_by_default: Some(true),
             match_only_by_mime: None,
-            output_path_hint: None
+            output_path_hint: None,
+            bail_if_empty_output: None
         }
     ];
 }
@@ -231,7 +248,13 @@ pub fn pipe_output(
 
     let join = tokio::spawn(async move {
         let mut z = inp;
-        tokio::io::copy(&mut z, &mut stdi).await?;
+        match tokio::io::copy(&mut z, &mut stdi).await {
+            Ok(_) => {}
+            // the child may legitimately not read stdin at all (e.g. echo);
+            // a closed stdin pipe is not a conversion failure
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+            Err(e) => return Err(e),
+        }
         std::io::Result::Ok(())
     });
     Ok(Box::pin(stdo_norm.chain(
@@ -244,6 +267,7 @@ pub struct CustomSpawningFileAdapter {
     args: Vec<String>,
     meta: AdapterMeta,
     output_path_hint: Option<String>,
+    bail_if_empty_output: bool,
 }
 impl GetMetadata for CustomSpawningFileAdapter {
     fn metadata(&self) -> &AdapterMeta {
@@ -328,6 +352,7 @@ impl FileAdapter for CustomSpawningFileAdapter {
             archive_recursion_depth,
             postprocess,
             config,
+            is_real_file,
             ..
         } = ai;
 
@@ -336,7 +361,22 @@ impl FileAdapter for CustomSpawningFileAdapter {
             .command(&filepath_hint, &config, cmd)
             .with_context(|| format!("Could not set cmd arguments for {}", self.binary))?;
         debug!("executing {:?}", cmd);
-        let output = pipe_output(&line_prefix, cmd, inp, &self.binary, "")?;
+        if self.bail_if_empty_output && !is_real_file {
+            // the empty-output bail needs to rewind the input stream on retry,
+            // which is only possible for real files on disk
+            log::warn!(
+                "bail_if_empty_output is ignored for '{}' inside an archive (stream cannot be rewound)",
+                filepath_hint.to_string_lossy()
+            );
+        }
+        let output = if self.bail_if_empty_output && is_real_file {
+            match self.spawn_peek_empty(cmd, inp).await? {
+                PeekOutcome::Bailed { reason } => return Err(adapter_bail(reason)),
+                PeekOutcome::Output(r) => r,
+            }
+        } else {
+            pipe_output(&line_prefix, cmd, inp, &self.binary, "")?
+        };
         Ok(one_file(AdaptInfo {
             filepath_hint: PathBuf::from(arg_replacer(
                 self.output_path_hint
@@ -355,12 +395,81 @@ impl FileAdapter for CustomSpawningFileAdapter {
         }))
     }
 }
+
+enum PeekOutcome {
+    /// the program produced no text output; decline the file (issue #3)
+    Bailed { reason: String },
+    Output(ReadBox),
+}
+
+impl CustomSpawningFileAdapter {
+    /// like `pipe_output`, but reads the first chunk of the child's stdout
+    /// before deciding: if the program produced no text output (e.g.
+    /// pdftotext on a PDF without a text layer, which emits only form-feed
+    /// page separators), bail so the next adapter (e.g. OCR) can handle the
+    /// file. The consumed first chunk is prepended to the returned stream.
+    async fn spawn_peek_empty(&self, mut cmd: Command, inp: ReadBox) -> Result<PeekOutcome> {
+        let cmd_log = format!("{:?}", cmd); // todo: perf
+        let mut child = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| map_exe_error(e, &self.binary, ""))?;
+        let mut stdi = child.stdin.take().expect("is piped");
+        let mut stdo = child.stdout.take().expect("is piped");
+
+        let join = tokio::spawn(async move {
+            let mut z = inp;
+            match tokio::io::copy(&mut z, &mut stdi).await {
+                Ok(_) => {}
+                // the child may legitimately not read stdin at all (e.g. echo);
+                // a closed stdin pipe is not a conversion failure
+                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+                Err(e) => return Err(e),
+            }
+            std::io::Result::Ok(())
+        });
+
+        // collect the first chunk of output to decide whether the program
+        // produced any text at all. pdftotext on an image-only PDF emits a
+        // lone form-feed per page rather than zero bytes, so "empty" here
+        // means "no bytes other than ASCII whitespace/control". reads may be
+        // partial, so keep filling the chunk until text appears or it is full.
+        let mut first = vec![0u8; 4096];
+        let mut filled = 0;
+        let mut has_text = false;
+        while filled < first.len() && !has_text {
+            let n = stdo.read(&mut first[filled..]).await?;
+            if n == 0 {
+                break;
+            }
+            has_text = first[filled..filled + n]
+                .iter()
+                .any(|&b| b > 0x20 && b != 0x7f);
+            filled += n;
+        }
+        if filled == 0 || !has_text {
+            // reap the child so it does not linger, then decline the file
+            let _ = child.wait().await;
+            return Ok(PeekOutcome::Bailed {
+                reason: format!("{} produced no text output", self.binary),
+            });
+        }
+        Ok(PeekOutcome::Output(Box::pin(
+            std::io::Cursor::new(first[..filled].to_vec())
+                .chain(stdo)
+                .chain(proc_wait(child, move || format!("subprocess: {cmd_log}")))
+                .chain(join_handle_to_stream(join)),
+        )))
+    }
+}
 impl CustomAdapterConfig {
     pub fn to_adapter(&self) -> CustomSpawningFileAdapter {
         CustomSpawningFileAdapter {
             binary: self.binary.clone(),
             args: self.args.clone(),
             output_path_hint: self.output_path_hint.clone(),
+            bail_if_empty_output: self.bail_if_empty_output.unwrap_or(false),
             meta: AdapterMeta {
                 name: self.name.clone(),
                 version: self.version,
@@ -415,6 +524,7 @@ mod test {
             binary: "pandoc".to_string(),
             args: vec!["--from=$input_file_pandoc_format".to_string()],
             output_path_hint: None,
+            bail_if_empty_output: None,
         }
         .to_adapter();
         for (file, expected) in [
@@ -496,6 +606,7 @@ PREFIX:Page 1:
             binary: "sed".to_string(),
             args: vec!["s/e/u/g".to_string()],
             output_path_hint: None,
+            bail_if_empty_output: None,
         };
 
         let adapter = adapter.to_adapter();
@@ -519,6 +630,228 @@ PREFIX:Page 1:
 
         let oup = adapted_to_vec(output).await?;
         println!("output: {}", String::from_utf8_lossy(&oup));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn adapter_bail_falls_back_to_next_adapter() -> Result<()> {
+        use crate::config::RgaConfig;
+        use crate::preproc::rga_preproc;
+        use tokio::io::AsyncReadExt;
+
+        // first adapter: matches .bailtest and always produces empty output -> bails
+        #[cfg(windows)]
+        let (silent_bin, silent_args) = ("cmd", vec!["/c".to_string(), "exit 0".to_string()]);
+        #[cfg(unix)]
+        let (silent_bin, silent_args) = ("true", vec![]);
+
+        // second adapter: matches .bailtest too and prints "rescued"
+        #[cfg(windows)]
+        let (echo_bin, echo_args) = ("cmd", vec!["/c".to_string(), "echo rescued".to_string()]);
+        #[cfg(unix)]
+        let (echo_bin, echo_args) = ("echo", vec!["rescued".to_string()]);
+
+        let mk = |name: &str, binary: &str, args: Vec<String>, bail: Option<bool>| {
+            CustomAdapterConfig {
+                name: name.to_string(),
+                description: "test adapter".to_string(),
+                disabled_by_default: None,
+                version: 1,
+                extensions: vec!["bailtest".to_string()],
+                mimetypes: None,
+                match_only_by_mime: None,
+                binary: binary.to_string(),
+                args,
+                output_path_hint: None,
+                bail_if_empty_output: bail,
+            }
+        };
+
+        let mut config = RgaConfig::default();
+        config.cache.disabled = true;
+        config.custom_adapters = Some(vec![
+            mk("silent", silent_bin, silent_args, Some(true)),
+            mk("rescuer", echo_bin, echo_args, None),
+        ]);
+
+        let filepath = std::env::temp_dir().join("rga-bail-poc.bailtest");
+        tokio::fs::write(&filepath, b"dummy content").await?;
+
+        let ai = AdaptInfo {
+            filepath_hint: filepath.clone(),
+            is_real_file: true,
+            archive_recursion_depth: 0,
+            inp: Box::pin(File::open(&filepath).await?),
+            line_prefix: "PREFIX: ".to_string(),
+            postprocess: true,
+            config,
+            file_mtime_unix_ms: None,
+        };
+        let mut out = rga_preproc(ai).await?;
+        let mut bytes = Vec::new();
+        out.read_to_end(&mut bytes).await?;
+        tokio::fs::remove_file(&filepath).await.ok();
+        let text = String::from_utf8(bytes)?;
+        assert!(
+            text.contains("rescued"),
+            "expected the second adapter to rescue the file, got: {text:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bail_flag_with_output_does_not_bail() -> Result<()> {
+        use crate::config::RgaConfig;
+        // an adapter with bail_if_empty_output whose program DOES produce output
+        // must behave exactly like a normal adapter (the peeked first chunk is
+        // prepended to the returned stream, not dropped)
+        #[cfg(windows)]
+        let (bin, args) = ("cmd", vec!["/c".to_string(), "echo peeked-output".to_string()]);
+        #[cfg(unix)]
+        let (bin, args) = ("echo", vec!["peeked-output".to_string()]);
+
+        let adapter = CustomAdapterConfig {
+            name: "echoer".to_string(),
+            description: "test adapter".to_string(),
+            disabled_by_default: None,
+            version: 1,
+            extensions: vec!["echoext".to_string()],
+            mimetypes: None,
+            match_only_by_mime: None,
+            binary: bin.to_string(),
+            args,
+            output_path_hint: None,
+            bail_if_empty_output: Some(true),
+        }
+        .to_adapter();
+
+        let filepath = std::env::temp_dir().join("rga-bail-echo.echoext");
+        tokio::fs::write(&filepath, b"dummy content").await?;
+        let ai = AdaptInfo {
+            filepath_hint: filepath.clone(),
+            is_real_file: true,
+            archive_recursion_depth: 0,
+            inp: Box::pin(File::open(&filepath).await?),
+            line_prefix: String::new(),
+            postprocess: false,
+            config: RgaConfig::default(),
+            file_mtime_unix_ms: None,
+        };
+        let detection = FileMatcher::Fast(FastFileMatcher::FileExtension("echoext".to_string()));
+        let output = adapter.adapt(ai, &detection).await?;
+        let mut out = adapted_to_vec(output).await?;
+        tokio::fs::remove_file(&filepath).await.ok();
+        let text = String::from_utf8(std::mem::take(&mut out))?;
+        assert!(
+            text.contains("peeked-output"),
+            "expected the adapter output to pass through, got: {text:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bail_on_whitespace_only_output() -> Result<()> {
+        use crate::config::RgaConfig;
+        // pdftotext on an image-only PDF emits only form-feed page separators
+        // (no bytes other than ASCII whitespace/control), which must count as
+        // "no output" for the bail — otherwise the fallback never triggers
+        // for real scanned PDFs.
+        #[cfg(windows)]
+        let (bin, args) = ("cmd", vec!["/c".to_string(), "echo.".to_string()]);
+        #[cfg(unix)]
+        let (bin, args) = ("echo", vec![String::new()]);
+
+        let adapter = CustomAdapterConfig {
+            name: "ffonly".to_string(),
+            description: "test adapter".to_string(),
+            disabled_by_default: None,
+            version: 1,
+            extensions: vec!["ffonlyext".to_string()],
+            mimetypes: None,
+            match_only_by_mime: None,
+            binary: bin.to_string(),
+            args,
+            output_path_hint: None,
+            bail_if_empty_output: Some(true),
+        }
+        .to_adapter();
+
+        let filepath = std::env::temp_dir().join("rga-bail-ffonly.ffonlyext");
+        tokio::fs::write(&filepath, b"dummy content").await?;
+        let ai = AdaptInfo {
+            filepath_hint: filepath.clone(),
+            is_real_file: true,
+            archive_recursion_depth: 0,
+            inp: Box::pin(File::open(&filepath).await?),
+            line_prefix: String::new(),
+            postprocess: false,
+            config: RgaConfig::default(),
+            file_mtime_unix_ms: None,
+        };
+        let detection = FileMatcher::Fast(FastFileMatcher::FileExtension("ffonlyext".to_string()));
+        let err = match adapter.adapt(ai, &detection).await {
+            std::result::Result::Ok(_) => panic!("expected a bail on whitespace-only output"),
+            Err(e) => e,
+        };
+        tokio::fs::remove_file(&filepath).await.ok();
+        assert!(
+            err.chain()
+                .any(|cause| cause.downcast_ref::<crate::adapters::AdapterBail>().is_some()),
+            "expected an AdapterBail, got: {err:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bail_exhaustion_errors_instead_of_looping() -> Result<()> {
+        use crate::config::RgaConfig;
+        use crate::preproc::rga_preproc;
+        // when the only matching adapter bails and no other adapter can handle
+        // the file, rga_preproc must fail with a clear message (not hang or loop)
+        #[cfg(windows)]
+        let (bin, args) = ("cmd", vec!["/c".to_string(), "exit 0".to_string()]);
+        #[cfg(unix)]
+        let (bin, args) = ("true", vec![]);
+
+        let mut config = RgaConfig::default();
+        config.cache.disabled = true;
+        config.custom_adapters = Some(vec![CustomAdapterConfig {
+            name: "silent".to_string(),
+            description: "test adapter".to_string(),
+            disabled_by_default: None,
+            version: 1,
+            extensions: vec!["bailonly".to_string()],
+            mimetypes: None,
+            match_only_by_mime: None,
+            binary: bin.to_string(),
+            args,
+            output_path_hint: None,
+            bail_if_empty_output: Some(true),
+        }]);
+
+        let filepath = std::env::temp_dir().join("rga-bail-only.bailonly");
+        tokio::fs::write(&filepath, b"dummy content").await?;
+        let ai = AdaptInfo {
+            filepath_hint: filepath.clone(),
+            is_real_file: true,
+            archive_recursion_depth: 0,
+            inp: Box::pin(File::open(&filepath).await?),
+            line_prefix: String::new(),
+            postprocess: true,
+            config,
+            file_mtime_unix_ms: None,
+        };
+        let result = rga_preproc(ai).await;
+        let err = match result {
+            std::result::Result::Ok(_) => panic!("expected an error when every adapter bailed"),
+            Err(e) => e,
+        };
+        tokio::fs::remove_file(&filepath).await.ok();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("bailed"),
+            "error should mention the bail, got: {msg}"
+        );
         Ok(())
     }
 }
