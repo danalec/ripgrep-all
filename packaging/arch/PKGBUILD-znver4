@@ -20,8 +20,7 @@ options=('!debug')
 source=(
   "ripgrep-all-${pkgver}.tar.gz::https://github.com/danalec/ripgrep-all/archive/refs/tags/v${pkgver}.tar.gz"
 )
-# Updated after the tag is pushed (the tarball hash cannot be known before).
-sha256sums=('0000000000000000000000000000000000000000000000000000000000000000')
+sha256sums=('1fe77aaebe3d68219d59251045bdebdb2d62d302060038ad4455226ef53e79bf')
 
 prepare() {
   cd ripgrep-all-${pkgver}
