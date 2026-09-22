@@ -40,10 +40,15 @@ jobs:
         run: |
           # release.yml creates the release in parallel; the cargo build
           # above usually outlasts it, but poll instead of racing.
+          # --repo is required: after chown, git refuses to resolve the
+          # remote (dubious ownership) and gh cannot detect the repo.
           for i in $(seq 1 60); do
-            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               echo "release $GITHUB_REF_NAME exists"
               exit 0
+            fi
+            if [ "$i" = 1 ]; then
+              echo "waiting for release $GITHUB_REF_NAME to appear..."
             fi
             sleep 30
           done
@@ -51,4 +56,4 @@ jobs:
           exit 1
 
       - name: Upload pacman packages
-        run: gh release upload "$GITHUB_REF_NAME" packaging/arch/dist/*.pkg.tar.zst --clobber
+        run: gh release upload "$GITHUB_REF_NAME" packaging/arch/dist/*.pkg.tar.zst --repo "$GITHUB_REPOSITORY" --clobber
