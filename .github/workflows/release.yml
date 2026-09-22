@@ -161,20 +161,21 @@ jobs:
         run: |
           # Same recipe as packaging/arch PKGBUILD znver4 variant:
           # AVX-512 capable codegen, fat LTO, single codegen unit.
-          echo "RUSTFLAGS=-C target-cpu=znver4" >> $GITHUB_ENV
-          echo 'EXTRA_CARGO_ARGS=--config profile.release.lto="fat" --config profile.release.codegen-units=1 --config profile.release.debug=false --config profile.release.split-debuginfo="off"' >> $GITHUB_ENV
-
-      - name: No target-specific tuning
-        if: ${{ !matrix.znver4 }}
-        shell: bash
-        run: echo "EXTRA_CARGO_ARGS=" >> $GITHUB_ENV
+          # (env vars instead of --config: cross forwards the environment
+          # to the build container and string values need no re-quoting)
+          {
+            echo "RUSTFLAGS=-C target-cpu=znver4"
+            echo "CARGO_PROFILE_RELEASE_LTO=fat"
+            echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1"
+            echo "CARGO_PROFILE_RELEASE_DEBUG=false"
+            echo "CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=off"
+          } >> $GITHUB_ENV
 
       - name: Show command used for Cargo
         run: |
           echo "cargo command is: ${{ env.CARGO }}"
           echo "target flag is: ${{ env.TARGET_FLAGS }}"
           echo "target dir is: ${{ env.TARGET_DIR }}"
-          echo "extra args are: ${{ env.EXTRA_CARGO_ARGS }}"
 
       - name: Get release download URL
         uses: actions/download-artifact@v4
@@ -191,7 +192,7 @@ jobs:
           echo "release version: $RELEASE_VERSION"
 
       - name: Build release binary
-        run: ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }} ${{ env.EXTRA_CARGO_ARGS }}
+        run: ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }}
 
       - name: Strip release binary (macos)
         if: matrix.build == 'macos'
