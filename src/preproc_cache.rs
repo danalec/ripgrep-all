@@ -16,9 +16,20 @@ pub struct CacheKey {
     file_path: String,
     file_mtime_unix_ms: i64,
 }
+
+/// Cache entries must be invalidated whenever a config option changes the
+/// adapter output. `postprocess` and `allow_binary` (rg's -a/--text) both
+/// alter what postproc emits, so they are part of the key.
+/// When adding more output-affecting options, extend this instead of the
+/// hardcoded constants it replaced (see git history: a41e2e9/f1502a3).
+fn config_hash(postprocess: bool, allow_binary: bool) -> String {
+    format!("postproc={postprocess};text={allow_binary}")
+}
+
 impl CacheKey {
     pub fn new(
         postprocess: bool,
+        allow_binary: bool,
         filepath_hint: &Path,
         adapter: &dyn FileAdapter,
         active_adapters: &ActiveAdapters,
@@ -38,11 +49,7 @@ impl CacheKey {
             "null".to_string()
         };
         Ok(Self {
-            config_hash: if postprocess {
-                "a41e2e9".to_string()
-            } else {
-                "f1502a3".to_string()
-            }, // todo: when we add more config options that affect caching, create a struct and actually hash it
+            config_hash: config_hash(postprocess, allow_binary),
             adapter: adapter.metadata().name.clone(),
             adapter_version: adapter.metadata().version,
             file_path: filepath_hint.clean().to_string_lossy().to_string(),
@@ -196,6 +203,17 @@ pub async fn open_cache_db(path: &Path) -> Result<impl PreprocCache + use<>> {
 mod test {
 
     use crate::preproc_cache::*;
+
+    #[test]
+    fn cache_key_hash_depends_on_output_affecting_flags() {
+        // rg's -a/--text changes what postproc emits, so flipping it must
+        // produce a different cache key — otherwise a cached "[rga: binary
+        // data]" result would be served for a -a search and vice versa
+        assert_ne!(config_hash(true, false), config_hash(true, true));
+        assert_ne!(config_hash(false, false), config_hash(false, true));
+        assert_ne!(config_hash(true, false), config_hash(false, false));
+        assert_eq!(config_hash(true, true), config_hash(true, true));
+    }
 
     #[tokio::test]
     async fn test_read_write() -> anyhow::Result<()> {

@@ -158,6 +158,7 @@ async fn adapt_caching(
 
     let cache_key = CacheKey::new(
         ai.postprocess,
+        ai.config.text,
         &ai.filepath_hint,
         adapter.as_ref(),
         &active_adapters,

@@ -135,6 +135,15 @@ pub struct RgaConfig {
     )]
     pub adapters: Vec<String>,
 
+    /// Same as rg's `-a` / `--text` flag: search binary data as if it were text.
+    ///
+    /// By default, rga replaces content it detects as binary with "[rga: binary data]".
+    /// This is set automatically when `-a`, `--text` or `--binary` is passed through to rg,
+    /// and can also be set in the config file to search binary content by default.
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[structopt(skip)] // parsed from the passthrough args, not an rga flag
+    pub text: bool,
+
     #[serde(default, skip_serializing_if = "is_default")]
     #[structopt(flatten)]
     pub cache: CacheConfig,
@@ -387,6 +396,41 @@ where
 }
 
 /// Split arguments into the ones we care about and the ones rg cares about
+/// rg short flags that do not take a value and may be clustered with other
+/// boolean short flags. Shorts that take a value (-A -B -C -d -E -e -f -g
+/// -j -m -M -r -t -T) are excluded so a cluster like `-ta` (type filter "a")
+/// is not misread as `-t -a`.
+const RG_BOOL_SHORTS: &[u8] = b"abcFhiIlnNoPqsuvVwxzSU";
+
+/// Returns true if rg's passthrough args ask for binary data to be treated
+/// as text (`-a` / `--text` / `--binary`), including `-a` clustered with
+/// other boolean short flags (e.g. `rg -ai`). Args after `--` are positional
+/// and ignored. Non-unicode args (only possible filenames) are ignored.
+fn passthrough_requests_text(args: &[OsString]) -> bool {
+    for arg in args {
+        let s = match arg.to_str() {
+            Some(s) => s,
+            None => continue,
+        };
+        match s {
+            "--" => return false, // end of options
+            "-a" | "--text" | "--binary" => return true,
+            _ => {
+                let bytes = s.as_bytes();
+                if bytes.len() > 1
+                    && bytes[0] == b'-'
+                    && bytes[1] != b'-' // not a long flag
+                    && bytes[1..].contains(&b'a')
+                    && bytes[1..].iter().all(|b| RG_BOOL_SHORTS.contains(b))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 pub fn split_args(is_rga_preproc: bool) -> Result<(RgaConfig, Vec<OsString>)> {
     let mut app = RgaConfig::clap();
 
@@ -413,13 +457,76 @@ pub fn split_args(is_rga_preproc: bool) -> Result<(RgaConfig, Vec<OsString>)> {
             }
         });
     debug!("rga (our) args: {:?}", our_args);
-    let matches = parse_args(our_args, is_rga_preproc).context("Could not parse config")?;
+    let mut matches = parse_args(our_args, is_rga_preproc).context("Could not parse config")?;
     if matches.rg_help {
         passthrough_args.insert(0, "--help".into());
     }
     if matches.rg_version {
         passthrough_args.insert(0, "--version".into());
     }
+    // Honor rg's -a/--text/--binary: rga's own binary detection in postproc would
+    // otherwise replace binary content with "[rga: binary data]" even though the
+    // user explicitly asked to search it.
+    // https://github.com/phiresky/ripgrep-all/issues/70
+    if !is_rga_preproc && passthrough_requests_text(&passthrough_args) {
+        matches.text = true;
+        // parse_args() has already passed the merged config on to rga-preproc
+        // via the RGA_CONFIG env variable, so update it with the new value.
+        // (skipped fields are CLI-only and not needed by rga-preproc)
+        let merged = serde_json::to_string(&serde_json::to_value(&matches)?)?;
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(RGA_CONFIG, merged) };
+    }
     debug!("rga (passthrough) args: {:?}", passthrough_args);
     Ok((matches, passthrough_args))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn os(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn text_flag_exact_forms() {
+        for args in [&["-a"][..], &["--text"][..], &["--binary"][..]] {
+            assert!(passthrough_requests_text(&os(args)), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn text_flag_clustered_with_boolean_shorts() {
+        // rg allows clustering boolean short flags: -ai == -a -i
+        for args in [&["-ai"][..], &["-Sia"][..], &["-Fxa"][..]] {
+            assert!(passthrough_requests_text(&os(args)), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn text_flag_not_misparsed_in_value_clusters() {
+        // -t/-e/-g take values: "-ta" is the type filter "a", not -t -a
+        for args in [&["-ta"][..], &["-ea"][..], &["-ga"][..], &["-t", "a"][..]] {
+            assert!(!passthrough_requests_text(&os(args)), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn text_flag_absent_and_after_double_dash() {
+        assert!(!passthrough_requests_text(&os(&["-i", "pat", "file.pdf"])));
+        assert!(!passthrough_requests_text(&os(&["-S"])));
+        // after "--" everything is positional, even something that looks like -a
+        assert!(!passthrough_requests_text(&os(&["--", "-a"])));
+        assert!(passthrough_requests_text(&os(&["-a", "--", "pat"])));
+    }
+
+    #[test]
+    fn text_flag_serde_default_from_config_file() {
+        // the config file option is plain serde: absent means false
+        let cfg: RgaConfig = serde_json::from_str("{}").unwrap();
+        assert!(!cfg.text);
+        let cfg: RgaConfig = serde_json::from_str(r#"{"text": true}"#).unwrap();
+        assert!(cfg.text);
+    }
 }
