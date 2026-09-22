@@ -99,11 +99,11 @@ jobs:
             suffix: "-znver4"
             znver4: true
           - build: linux
-            os: ubuntu-22.04
+            os: ubuntu-24.04-arm
             rust: nightly
             target: aarch64-unknown-linux-gnu
-            strip: aarch64-linux-gnu-strip
             suffix: ""
+            native: true
           - build: linux
             os: ubuntu-22.04
             rust: nightly
@@ -253,8 +253,8 @@ jobs:
             "target/${{ matrix.target }}/release/rga-fzf" \
             "target/${{ matrix.target }}/release/rga-fzf-open"
 
-      - name: Strip release binary (linux)
-        if: matrix.build == 'linux'
+      - name: Strip release binary (linux, cross)
+        if: matrix.build == 'linux' && !matrix.native
         run: |
           docker run --rm -v \
             "$PWD/target:/target:Z" \
@@ -264,6 +264,14 @@ jobs:
             "/target/${{ matrix.target }}/release/rga-preproc" \
             "/target/${{ matrix.target }}/release/rga-fzf" \
             "/target/${{ matrix.target }}/release/rga-fzf-open"
+
+      - name: Strip release binary (linux, native)
+        if: matrix.build == 'linux' && matrix.native
+        run: |
+          strip "target/${{ matrix.target }}/release/rga" \
+            "target/${{ matrix.target }}/release/rga-preproc" \
+            "target/${{ matrix.target }}/release/rga-fzf" \
+            "target/${{ matrix.target }}/release/rga-fzf-open"
 
       - name: Build archive
         shell: bash
