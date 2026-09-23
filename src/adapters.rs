@@ -6,6 +6,7 @@ pub mod fits;
 pub mod geodata;
 pub mod llm;
 pub mod mbox;
+pub mod media;
 pub mod parquet;
 pub mod postproc;
 pub mod sevenz;
@@ -182,6 +183,11 @@ pub fn get_all_adapters(custom_adapters: Option<Vec<CustomAdapterConfig>>) -> Ad
 
     let internal_adapters: Vec<Arc<dyn FileAdapter>> = vec![
         Arc::new(PostprocPageBreaks::default()),
+        // native media metadata takes precedence over the ffmpeg spawning
+        // adapter for the extensions both can handle; bailing falls through
+        Arc::new(media::JpegExifAdapter::new()),
+        Arc::new(media::AudioTagsAdapter::new()),
+        Arc::new(media::DicomAdapter::new()),
         Arc::new(ffmpeg::FFmpegAdapter::new()),
         Arc::new(zip::ZipAdapter::new()),
         Arc::new(sevenz::SevenZAdapter::new()),
