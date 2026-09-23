@@ -216,11 +216,7 @@ fn parse_gguf(data: &[u8]) -> Result<String> {
     let version = r.u32()?;
     // GGUF v1 used 32-bit counts and string lengths
     let read_count = |r: &mut Reader, v: u32| -> Result<u64> {
-        if v == 1 {
-            Ok(r.u32()? as u64)
-        } else {
-            r.u64()
-        }
+        if v == 1 { Ok(r.u32()? as u64) } else { r.u64() }
     };
     let read_str = |r: &mut Reader, v: u32| -> Result<String> {
         let len = read_count(r, v)? as usize;
@@ -290,8 +286,8 @@ fn parse_safetensors(data: &[u8]) -> Result<String> {
     if 8 + header_len > data.len() {
         bail!("safetensors header overruns file");
     }
-    let header: serde_json::Value =
-        serde_json::from_slice(&data[8..8 + header_len]).context("safetensors header is not valid JSON")?;
+    let header: serde_json::Value = serde_json::from_slice(&data[8..8 + header_len])
+        .context("safetensors header is not valid JSON")?;
     let obj = header
         .as_object()
         .ok_or_else(|| format_err!("safetensors header is not an object"))?;
@@ -403,13 +399,10 @@ fn parse_npy(data: &[u8]) -> Result<String> {
                         depth -= 1;
                     }
                     depth == 0
-                })?
-                    + 1
+                })? + 1
             }
             Some('\'') => rest[1..].find('\'')? + 2,
-            _ => rest
-                .find([',', '\n', '}'])
-                .unwrap_or(rest.len()),
+            _ => rest.find([',', '\n', '}']).unwrap_or(rest.len()),
         };
         Some(rest[..end].trim().trim_matches('\'').to_string())
     };
@@ -425,8 +418,7 @@ fn parse_npy(data: &[u8]) -> Result<String> {
 impl FileAdapter for NpyAdapter {
     async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
         let (data, filepath_hint, prefix, depth, postprocess, config) = read_input!(ai);
-        let text = parse_npy(&data)
-            .map_err(|e| adapter_bail(format!("npy: {e}")))?;
+        let text = parse_npy(&data).map_err(|e| adapter_bail(format!("npy: {e}")))?;
         text_result(filepath_hint, prefix, depth, postprocess, config, text)
     }
 }
@@ -500,12 +492,7 @@ fn looks_like_string(bytes: &[u8]) -> bool {
 
 /// try to interpret `bytes` as a nested message; returns how many strings it
 /// contained if it parsed strictly to the end
-fn protobuf_walk(
-    data: &[u8],
-    depth: usize,
-    out: &mut String,
-    lines: &mut usize,
-) -> Result<usize> {
+fn protobuf_walk(data: &[u8], depth: usize, out: &mut String, lines: &mut usize) -> Result<usize> {
     let mut pos = 0;
     let mut strings = 0;
     while pos < data.len() {
@@ -580,8 +567,7 @@ fn parse_protobuf(data: &[u8]) -> Result<String> {
 impl FileAdapter for ProtobufAdapter {
     async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
         let (data, filepath_hint, prefix, depth, postprocess, config) = read_input!(ai);
-        let text = parse_protobuf(&data)
-            .map_err(|e| adapter_bail(format!("protobuf: {e}")))?;
+        let text = parse_protobuf(&data).map_err(|e| adapter_bail(format!("protobuf: {e}")))?;
         text_result(filepath_hint, prefix, depth, postprocess, config, text)
     }
 }
@@ -600,7 +586,9 @@ mod tests {
     ) -> Result<String> {
         let (a, d) = simple_adapt_info(std::path::Path::new(name), Box::pin(Cursor::new(data)));
         let out = adapter.adapt(a, &d).await?;
-        Ok(String::from_utf8(adapted_to_vec(out).await?)?.trim().to_string())
+        Ok(String::from_utf8(adapted_to_vec(out).await?)?
+            .trim()
+            .to_string())
     }
 
     fn make_gguf_v2(kvs: &[(String, u32, Vec<u8>)]) -> Vec<u8> {
@@ -635,7 +623,11 @@ mod tests {
         }
         let data = make_gguf_v2(&[
             ("general.architecture".into(), 8, str_val("llama")),
-            ("llama.context_length".into(), 4, 4096u32.to_le_bytes().to_vec()),
+            (
+                "llama.context_length".into(),
+                4,
+                4096u32.to_le_bytes().to_vec(),
+            ),
             ("llama.rope.dimension_count".into(), 9, rope),
         ]);
         let out = adapt_to_string(GgufAdapter, "model.gguf", data).await?;
@@ -688,7 +680,10 @@ mod tests {
 
     #[tokio::test]
     async fn npy_header_v1() -> Result<()> {
-        let data = make_npy("{'descr': '<f4', 'fortran_order': False, 'shape': (1000, 768), }", 1000 * 768 * 4);
+        let data = make_npy(
+            "{'descr': '<f4', 'fortran_order': False, 'shape': (1000, 768), }",
+            1000 * 768 * 4,
+        );
         let out = adapt_to_string(NpyAdapter, "embeddings.npy", data).await?;
         assert_eq!(out, "descr: <f4\nfortran_order: False\nshape: (1000, 768)");
         Ok(())
@@ -699,7 +694,12 @@ mod tests {
         let data = b"\x94NUMPY garbage".to_vec();
         let (a, d) = simple_adapt_info(std::path::Path::new("x.npy"), Box::pin(Cursor::new(data)));
         let res = NpyAdapter.adapt(a, &d).await;
-        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -751,6 +751,11 @@ mod tests {
         let data = vec![0xffu8; 100];
         let (a, d) = simple_adapt_info(std::path::Path::new("x.pb"), Box::pin(Cursor::new(data)));
         let res = ProtobufAdapter.adapt(a, &d).await;
-        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
     }
 }
