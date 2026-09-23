@@ -149,13 +149,15 @@ impl<'a> CReader<'a> {
                 Ok(())
             }
             T_MAP => {
+                // compact protocol: single byte packs key (high nibble) and
+                // value (low nibble) types; the size is ALWAYS a varint
                 let b = self.u8()?;
-                let n = ((b >> 4) & 0x0f) as usize;
-                if n == 15 {
-                    bail!("thrift: oversized map");
-                }
                 let key_type = (b >> 4) & 0x0f;
                 let val_type = b & 0x0f;
+                let n = self.varint()? as usize;
+                if n > 1 << 20 {
+                    bail!("thrift: map too long ({n})");
+                }
                 for _ in 0..n {
                     self.skip(key_type)?;
                     self.skip(val_type)?;
@@ -287,8 +289,10 @@ fn parse_footer(metadata: &[u8]) -> Result<(i64, Vec<SchemaElement>)> {
 }
 
 /// render the flat schema element list as an indented tree using the
-/// `num_children` nesting of the root group
+/// `num_children` nesting of the root group. recursion depth is capped so a
+/// crafted footer cannot overflow the stack; deeper levels flatten out.
 fn render_schema(elems: &[SchemaElement]) -> String {
+    const MAX_DEPTH: usize = 64;
     let mut out = String::new();
     let mut idx = 0;
     fn render(elems: &[SchemaElement], idx: &mut usize, depth: usize, out: &mut String) {
@@ -297,11 +301,13 @@ fn render_schema(elems: &[SchemaElement]) -> String {
         }
         let el = &elems[*idx];
         *idx += 1;
-        let indent = "  ".repeat(depth);
+        let indent = "  ".repeat(depth.min(MAX_DEPTH));
         if el.num_children > 0 {
             out.push_str(&format!("{indent}{} (group)\n", el.name));
-            for _ in 0..el.num_children {
-                render(elems, idx, depth + 1, out);
+            if depth < MAX_DEPTH {
+                for _ in 0..el.num_children {
+                    render(elems, idx, depth + 1, out);
+                }
             }
         } else {
             let t = el
@@ -474,17 +480,77 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parquet_rejects_non_parquet() {
+    async fn parquet_deeply_nested_schema_does_not_stack_overflow() {
+        // a crafted footer with a linear chain of 10k nested groups must
+        // not overflow the stack; output flattens at the depth cap
+        const N: usize = 10_000;
+        let mut md = Vec::new();
+        i32_field(1, 1, &mut md);
+        field(1, T_LIST, &mut md);
+        md.push(0xf0 | T_STRUCT);
+        varint(N as u64, &mut md);
+        for i in 0..N {
+            md.extend_from_slice(&make_group(&format!("g{i}"), 1));
+        }
+        // final element: a leaf so the chain ends
+        md.extend_from_slice(&make_leaf("leaf", 1, 0));
+        i64_field(1, 1, &mut md);
+        stop(&mut md);
+        let file = make_parquet(&md);
+
         let (a, d) = simple_adapt_info(
-            std::path::Path::new("x.parquet"),
-            Box::pin(Cursor::new(vec![0u8; 100])),
+            std::path::Path::new("deep.parquet"),
+            Box::pin(Cursor::new(file)),
         );
-        let res = ParquetAdapter.adapt(a, &d).await;
+        let out = ParquetAdapter.adapt(a, &d).await;
+        let text =
+            String::from_utf8(adapted_to_vec(out.expect("should parse")).await.unwrap()).unwrap();
+        // cap at MAX_DEPTH=64: 65 groups render (g0..g64), then output stops
         assert!(
-            res.err()
-                .expect("should bail")
-                .downcast_ref::<AdapterBail>()
-                .is_some()
+            text.contains("g0 (group)"),
+            "got {}",
+            text.lines().next().unwrap_or("")
         );
+        assert!(text.contains("g64 (group)"), "missing capped tail");
+        assert!(!text.contains("g65"), "should flatten at the depth cap");
+    }
+
+    #[tokio::test]
+    async fn parquet_map_field_is_skipped_via_varint_size() {
+        // FileMetaData with an unknown field holding a compact map with a
+        // varint size > 14 (old code read the size nibble and bailed).
+        // field ids ascend: version(1), schema(2), num_rows(3), map(4)
+        let mut md = Vec::new();
+        i32_field(1, 1, &mut md); // version
+        field(1, T_LIST, &mut md); // field 2: schema
+        md.push(0xf0 | T_STRUCT);
+        varint(2, &mut md);
+        md.extend_from_slice(&make_group("message", 1));
+        md.extend_from_slice(&make_leaf("leaf", 1, 0)); // INT32 REQUIRED
+        i64_field(1, 0, &mut md); // field 3: num_rows
+        // unknown field 4: map<binary, binary> with 20 entries (varint size)
+        field(1, T_MAP, &mut md);
+        md.push((T_BINARY << 4) | T_BINARY);
+        varint(20, &mut md);
+        for i in 0..20 {
+            let k = format!("k{i}");
+            varint(k.len() as u64, &mut md);
+            md.extend_from_slice(k.as_bytes());
+            let v = format!("v{i}");
+            varint(v.len() as u64, &mut md);
+            md.extend_from_slice(v.as_bytes());
+        }
+        stop(&mut md);
+        let file = make_parquet(&md);
+
+        let (a, d) = simple_adapt_info(
+            std::path::Path::new("map.parquet"),
+            Box::pin(Cursor::new(file)),
+        );
+        let out = ParquetAdapter.adapt(a, &d).await.expect("should parse");
+        let text = String::from_utf8(adapted_to_vec(out).await.unwrap()).unwrap();
+        assert!(text.contains("message (group)"), "got {text}");
+        assert!(text.contains("leaf: INT32 REQUIRED"), "got {text}");
+        assert!(text.contains("num_rows: 0"), "got {text}");
     }
 }
