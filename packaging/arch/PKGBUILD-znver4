@@ -52,7 +52,10 @@ check() {
   export LIBSQLITE3_SYS_USE_PKG_CONFIG=1
   export ZSTD_SYS_USE_PKG_CONFIG=1
   # generic codegen: the check only validates the code and must run on any
-  # build machine, AVX-512 or not
+  # build machine, AVX-512 or not. makepkg runs the functions in one shell,
+  # so the znver4 rustflags exported in build() would leak into the test
+  # binaries (and their build scripts) here and SIGILL without an AVX-512 CPU.
+  unset CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS
   cargo test --frozen --all-features
 }
 
