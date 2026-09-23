@@ -188,6 +188,14 @@ Adapters:
    Extensions: .db, .db3, .sqlite, .sqlite3  
    Mime Types: application/x-sqlite3
 
+- **shp**
+  Extracts the geometry type, bounding box and record/shape-type index from ESRI shapefiles  
+   Extensions: .shp
+
+- **tiff**
+  Extracts ASCII tags (description, make, model, software, datetime) and GeoTIFF geokeys from TIFF image files  
+   Extensions: .tif, .tiff
+
 The following adapters are disabled by default, and can be enabled using '--rga-adapters=+foo,bar':
 
 - **mail**
