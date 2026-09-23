@@ -191,6 +191,9 @@ Adapters:
 - **dbf**
   Extracts the field descriptors and record rows (as TSV) from dBase/FoxPro DBF files  
    Extensions: .dbf
+- **fits**
+  Extracts the header cards (target, instrument, exposure, WCS) from FITS astronomy/scientific image files  
+   Extensions: .fits, .fit, .fts
 
 The following adapters are disabled by default, and can be enabled using '--rga-adapters=+foo,bar':
 

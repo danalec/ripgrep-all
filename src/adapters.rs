@@ -2,6 +2,7 @@ pub mod antiword;
 pub mod custom;
 pub mod decompress;
 pub mod ffmpeg;
+pub mod fits;
 pub mod mbox;
 pub mod postproc;
 use std::sync::Arc;
@@ -182,6 +183,7 @@ pub fn get_all_adapters(custom_adapters: Option<Vec<CustomAdapterConfig>>) -> Ad
         Arc::new(tar::TarAdapter::new()),
         Arc::new(sqlite::SqliteAdapter::new()),
         Arc::new(tabular::DbfAdapter::new()),
+        Arc::new(fits::FitsAdapter::new()),
     ];
     adapters.extend(
         BUILTIN_SPAWNING_ADAPTERS
