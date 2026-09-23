@@ -291,12 +291,7 @@ fn parse_footer(metadata: &[u8]) -> Result<(i64, Vec<SchemaElement>)> {
 fn render_schema(elems: &[SchemaElement]) -> String {
     let mut out = String::new();
     let mut idx = 0;
-    fn render(
-        elems: &[SchemaElement],
-        idx: &mut usize,
-        depth: usize,
-        out: &mut String,
-    ) {
+    fn render(elems: &[SchemaElement], idx: &mut usize, depth: usize, out: &mut String) {
         if *idx >= elems.len() {
             return;
         }
@@ -313,10 +308,7 @@ fn render_schema(elems: &[SchemaElement]) -> String {
                 .primitive_type
                 .map(parquet_type_name)
                 .unwrap_or("UNKNOWN");
-            let rep = el
-                .repetition
-                .map(parquet_repetition_name)
-                .unwrap_or("");
+            let rep = el.repetition.map(parquet_repetition_name).unwrap_or("");
             out.push_str(&format!("{indent}{}: {t} {rep}\n", el.name));
         }
     }
@@ -335,20 +327,14 @@ fn parse_parquet(data: &[u8]) -> Result<String> {
     if &data[footer_len_pos + 4..data.len()] != b"PAR1" {
         bail!("not a parquet file (bad footer magic)");
     }
-    let metadata_len = u32::from_le_bytes(
-        data[footer_len_pos..footer_len_pos + 4]
-            .try_into()
-            .unwrap(),
-    ) as usize;
+    let metadata_len =
+        u32::from_le_bytes(data[footer_len_pos..footer_len_pos + 4].try_into().unwrap()) as usize;
     if metadata_len + 8 > data.len() {
         bail!("parquet footer length overruns file");
     }
     let metadata = &data[data.len() - 8 - metadata_len..footer_len_pos];
     let (num_rows, schema) = parse_footer(metadata)?;
-    Ok(format!(
-        "num_rows: {num_rows}\n{}",
-        render_schema(&schema)
-    ))
+    Ok(format!("num_rows: {num_rows}\n{}", render_schema(&schema)))
 }
 
 #[async_trait]
@@ -365,8 +351,7 @@ impl FileAdapter for ParquetAdapter {
         } = ai;
         let mut data = Vec::new();
         inp.read_to_end(&mut data).await?;
-        let text = parse_parquet(&data)
-            .map_err(|e| adapter_bail(format!("parquet: {e}")))?;
+        let text = parse_parquet(&data).map_err(|e| adapter_bail(format!("parquet: {e}")))?;
         let mut out_path: PathBuf = filepath_hint;
         out_path.set_extension("txt");
         Ok(one_file(AdaptInfo {
@@ -478,7 +463,9 @@ mod tests {
             Box::pin(Cursor::new(file)),
         );
         let out = ParquetAdapter.adapt(a, &d).await?;
-        let text = String::from_utf8(adapted_to_vec(out).await?)?.trim().to_string();
+        let text = String::from_utf8(adapted_to_vec(out).await?)?
+            .trim()
+            .to_string();
         assert_eq!(
             text,
             "num_rows: 1000000\nmessage (group)\n  name: BYTE_ARRAY OPTIONAL\n  score: DOUBLE OPTIONAL"
@@ -493,6 +480,11 @@ mod tests {
             Box::pin(Cursor::new(vec![0u8; 100])),
         );
         let res = ParquetAdapter.adapt(a, &d).await;
-        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
     }
 }
