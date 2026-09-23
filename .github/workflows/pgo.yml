@@ -93,6 +93,11 @@ jobs:
           pip install reportlab python-docx
           # poppler + pandoc for training coverage of those adapters
           choco install poppler pandoc --no-progress -y
+          # Git for Windows' bash ships xpdf pdftotext in /usr/bin, which
+          # shadows choco's poppler and breaks rga's poppler adapter (xpdf
+          # rejects poppler's CLI). Force choco's shims first in PATH.
+          echo "C:\\ProgramData\\chocolatey\\bin" >> "$GITHUB_PATH"
+          pdftotext -v 2>&1 | head -1 || true
 
       - name: Build PGO variant
         shell: bash
