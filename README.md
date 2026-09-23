@@ -188,12 +188,21 @@ Adapters:
    Extensions: .db, .db3, .sqlite, .sqlite3  
    Mime Types: application/x-sqlite3
 
+- **dbf**
+  Extracts the field descriptors and record rows (as TSV) from dBase/FoxPro DBF files  
+   Extensions: .dbf
+
 The following adapters are disabled by default, and can be enabled using '--rga-adapters=+foo,bar':
 
 - **mail**
   Reads mailbox/mail files and runs extractors on the contents and attachments.  
    Extensions: .mbox, .mbx, .eml  
    Mime Types: application/mbox, message/rfc822
+
+- **xls2csv**
+  Uses xls2csv (from catdoc) to convert legacy binary Excel (.xls) spreadsheets to CSV
+  Runs: xls2csv $input_virtual_path  
+   Extensions: .xls
 
 ## USAGE:
 
