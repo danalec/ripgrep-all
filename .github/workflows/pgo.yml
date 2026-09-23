@@ -103,6 +103,9 @@ jobs:
       - name: Build PGO variant
         shell: bash
         run: |
+          # The runner prepends Git's /mingw64/bin to PATH inside bash steps,
+          # ahead of GITHUB_PATH, so the poppler prepend must happen here.
+          export PATH="/c/ProgramData/chocolatey/bin:$PATH"
           echo "pdftotext resolved to: $(command -v pdftotext)"
           pdftotext -v 2>&1 | head -1
           bash packaging/pgo/build-pgo.sh x86_64-pc-windows-msvc dist-pgo "${GITHUB_REF_NAME#v}"
