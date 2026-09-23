@@ -7,6 +7,7 @@ pub mod config;
 pub mod daemon;
 pub mod expand;
 pub mod matching;
+pub mod output;
 pub mod preproc;
 pub mod preproc_cache;
 pub mod recurse;

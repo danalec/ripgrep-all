@@ -258,6 +258,49 @@ pub struct RgaConfig {
     #[serde(default)]
     #[clap(long = "rga-postproc-page-include-empty")] 
     pub postproc_page_include_empty: Option<bool>,
+
+    /// Reformat ripgrep's output (wrapper mode: forces `rg --json --color=never`).
+    ///
+    /// - `--rga-format=csv`: RFC 4180 table with a header row
+    /// - `--rga-format=xml`: one `<match>` element per match
+    /// - `--rga-format='[%f:%n] %m'`: custom template with %fields:
+    ///   `%f` file path, `%n` line number, `%c` 1-based byte column,
+    ///   `%m` matched text, `%d` whole line; `\n` `\t` `\r` `\\` escapes.
+    ///   Append `\n` to the template to get one record per line.
+    ///
+    /// Wrapper modes re-render matches as `path:line:text` (without colors,
+    /// which ripgrep's JSON does not let us reconstruct) and cannot be
+    /// combined with rg's own output-shape flags (`-l`, `-c`, `--json`, ...).
+    /// Filters like `-A`/`-B`/`-C` still work but context lines are not shown
+    /// in csv/xml/format modes.
+    #[serde(skip)] // CLI only
+    #[clap(long = "rga-format", require_equals = true)]
+    pub format: Option<String>,
+
+    /// Only show matches on lines that also match all of these patterns
+    /// (repeatable). Like ugrep's `--and`. Wrapper mode: colors are lost.
+    #[serde(skip)] // CLI only
+    #[clap(long = "rga-and", require_equals = true)]
+    pub and: Vec<String>,
+
+    /// Hide matches on lines that match any of these patterns (repeatable).
+    /// Like ugrep's `--not`. Wrapper mode: colors are lost.
+    #[serde(skip)] // CLI only
+    #[clap(long = "rga-not", require_equals = true)]
+    pub not: Vec<String>,
+
+    /// Replace each match with this %-field template (like rg --replace, but
+    /// with %fields, see --rga-format) in the `path:line:text` rendering.
+    /// Implies wrapper mode.
+    #[serde(skip)] // CLI only
+    #[clap(long = "rga-replace", require_equals = true)]
+    pub replace: Option<String>,
+
+    /// Stop printing results after N files with matches (like ugrep's
+    /// --max-files). The search itself still runs to completion.
+    #[serde(skip)] // CLI only
+    #[clap(long = "rga-max-files", require_equals = true)]
+    pub max_files: Option<usize>,
 }
 
 impl RgaConfig {
@@ -493,6 +536,13 @@ where
         res.cache_clear = arg_matches.cache_clear;
         res.cache_prune = arg_matches.cache_prune;
         res.daemon = arg_matches.daemon;
+        // CLI-only output wrapper fields (serde(skip) drops them in the
+        // config-file merge round-trip)
+        res.format = arg_matches.format;
+        res.and = arg_matches.and;
+        res.not = arg_matches.not;
+        res.replace = arg_matches.replace;
+        res.max_files = arg_matches.max_files;
     }
     Ok(res)
 }

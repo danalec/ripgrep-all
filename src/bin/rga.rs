@@ -106,6 +106,16 @@ async fn main() -> anyhow::Result<()> {
 
     let (config, mut passthrough_args) = split_args(false)?;
 
+    let output_opts = rga::output::build_output_options(
+        config.format.clone(),
+        &config.and,
+        &config.not,
+        config.replace.clone(),
+        config.max_files,
+    )
+    .context("invalid output option")?;
+    let wrapper_mode = output_opts.is_active();
+
     if config.doctor {
         return doctor();
     }
@@ -171,35 +181,59 @@ async fn main() -> anyhow::Result<()> {
 
     let new_path = compute_exe_path()?;
 
-    let rg_args = vec![
-        "--no-line-number",
-        // smart case by default because within weird files
-        // we probably can't really trust casing anyways
-        "--smart-case",
-    ];
+    // wrapper modes (--rga-format/--rga-and/--rga-not/--rga-replace/--rga-max-files)
+    // re-render rg's output from its JSON message stream; that requires line
+    // numbers in the JSON, so the default --no-line-number is omitted
+    let rg_args: Vec<&str> = if wrapper_mode {
+        vec![
+            // smart case by default because within weird files
+            // we probably can't really trust casing anyways
+            "--smart-case",
+        ]
+    } else {
+        vec!["--no-line-number", "--smart-case"]
+    };
 
     let exe = std::env::current_exe().context("Could not get executable location")?;
     let preproc_exe = exe.with_file_name("rga-preproc");
 
     let before = Instant::now();
     let mut cmd = Command::new("rg");
-    cmd.args(rg_args)
+    cmd.args(&rg_args)
         .arg("--pre")
         .arg(preproc_exe)
         .arg("--pre-glob")
         .arg(pre_glob)
-        .args(passthrough_args)
+        .args(&passthrough_args)
         .env("RGA_CONFIG", serde_json::to_string(&config).unwrap_or_else(|_| String::new()))
         .env("PATH", new_path)
         .stderr(std::process::Stdio::piped());
+    if wrapper_mode {
+        // appended after the user args so rg definitely emits the JSON stream
+        // we parse (colors would embed ANSI codes in the match text)
+        cmd.arg("--json").arg("--color=never");
+        cmd.stdout(std::process::Stdio::piped());
+    }
     log::debug!("rg command to run: {:?}", cmd);
     let mut child = cmd
         .spawn()
         .map_err(|e| map_exe_error(e, "rg", "Please make sure you have ripgrep installed."))?;
 
-    let result = child.wait()?;
+    let (result, printed_records) = if wrapper_mode {
+        let stdout = child.stdout.take().context("rg stdout not piped")?;
+        let stdout = std::io::BufReader::new(stdout);
+        let n = rga::output::transform(stdout, std::io::stdout(), &output_opts)?;
+        (child.wait()?, Some(n))
+    } else {
+        (child.wait()?, None)
+    };
 
     log::debug!("running rg took {}", print_dur(before));
+    // rg found matches but every record was dropped by the wrapper's filters
+    // (--rga-and/--rga-not/--rga-max-files): report "no matches" like rg does
+    if result.success() && printed_records == Some(0) {
+        std::process::exit(1);
+    }
     if !result.success() {
         if let Some(mut stderr) = child.stderr.take() {
             use std::io::Read as _;
