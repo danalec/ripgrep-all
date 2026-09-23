@@ -178,6 +178,11 @@ Adapters:
    Extensions: .zip, .jar, .3mf, .usdz  
    Mime Types: application/zip
 
+- **7z**
+  Reads a 7z archive and recurses down into its contents (LZMA/LZMA2, BZip2, Deflate, PPMd; encrypted archives are not supported)  
+   Extensions: .7z, .cb7  
+   Mime Types: application/x-7z-compressed
+
 - **decompress**
   Reads compressed file as a stream and runs a different extractor on the contents.  
    Extensions: .als, .bz2, .gz, .tbz, .tbz2, .tgz, .xz, .zst  

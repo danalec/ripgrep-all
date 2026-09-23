@@ -8,6 +8,7 @@ pub mod llm;
 pub mod mbox;
 pub mod parquet;
 pub mod postproc;
+pub mod sevenz;
 use std::sync::Arc;
 pub mod sqlite;
 pub mod tabular;
@@ -183,6 +184,7 @@ pub fn get_all_adapters(custom_adapters: Option<Vec<CustomAdapterConfig>>) -> Ad
         Arc::new(PostprocPageBreaks::default()),
         Arc::new(ffmpeg::FFmpegAdapter::new()),
         Arc::new(zip::ZipAdapter::new()),
+        Arc::new(sevenz::SevenZAdapter::new()),
         Arc::new(decompress::DecompressAdapter::new()),
         Arc::new(mbox::MboxAdapter::new()),
         Arc::new(antiword::AntiwordAdapter::new()),
