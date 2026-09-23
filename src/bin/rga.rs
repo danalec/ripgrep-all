@@ -188,6 +188,13 @@ async fn main() -> anyhow::Result<()> {
         .arg(preproc_exe)
         .arg("--pre-glob")
         .arg(pre_glob)
+        // MS Office owner/lock files (~$name.docx) are never real documents
+        // and make adapters fail loudly (rg exits 2 when any preprocessor
+        // fails) — exclude them from preprocessing; rg then treats them as
+        // ordinary (usually empty) files.
+        // https://github.com/phiresky/ripgrep-all/issues/151
+        .arg("--pre-glob")
+        .arg("!~$*")
         .args(passthrough_args)
         .env("RGA_CONFIG", serde_json::to_string(&config).unwrap_or_else(|_| String::new()))
         .env("PATH", new_path)

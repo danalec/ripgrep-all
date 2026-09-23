@@ -233,9 +233,25 @@ pub async fn rga_preproc(ai: AdaptInfo) -> Result<ReadBox> {
                                 );
                             }
                             None => {
-                                return Err(e).with_context(|| {
-                                    format!("run_adapter({})", path_hint_copy.to_string_lossy())
-                                });
+                                // hard adapter failure (e.g. pandoc choking on
+                                // a corrupt file): emit a searchable marker
+                                // line instead of aborting with exit code 2
+                                // (issue #151)
+                                eprintln!(
+                                    "rga: preprocessing '{}' failed — emitting '[rga: preprocessing failed]' marker",
+                                    path_hint_copy.to_string_lossy()
+                                );
+                                return Ok(
+                                    marker_entry(
+                                        &line_prefix,
+                                        &config,
+                                        archive_recursion_depth,
+                                        &path_hint_copy,
+                                        &adapter_name,
+                                        e,
+                                    )
+                                    .inp,
+                                );
                             }
                         }
                     }
@@ -364,6 +380,95 @@ async fn read_discard(mut x: ReadBox) -> Result<()> {
     Ok(())
 }
 
+/// Flatten an error into a single line for the `[rga: ...]` markers
+/// (search results are line-based; raw multi-line errors would garble them).
+pub fn one_line_error(err: &anyhow::Error) -> String {
+    let msg = format!("{err:#}")
+        .replace('\n', " | ")
+        .trim_end_matches(" | ")
+        .trim()
+        .to_string();
+    let mut chars = msg.chars();
+    let truncated: String = chars.by_ref().take(300).collect();
+    if chars.next().is_some() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}
+
+/// Build a one-line AdaptInfo flagging a preprocessing failure, following the
+/// same convention as the other `[rga: ...]` markers: the degradation stays
+/// visible in the output and is searchable (`rga "preprocessing failed"`
+/// finds all broken files) instead of aborting the whole search with
+/// ripgrep's exit code 2. https://github.com/phiresky/ripgrep-all/issues/151
+fn marker_entry(
+    line_prefix: &str,
+    config: &RgaConfig,
+    archive_recursion_depth: i32,
+    path: &Path,
+    context: &str,
+    err: anyhow::Error,
+) -> AdaptInfo {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+    let context = if context.is_empty() {
+        String::new()
+    } else {
+        format!("{context}: ")
+    };
+    let line = format!(
+        "{line_prefix}[rga: preprocessing failed: {context}{}: {}]\n",
+        name,
+        one_line_error(&err)
+    );
+    AdaptInfo {
+        filepath_hint: path.to_path_buf(),
+        is_real_file: false,
+        file_mtime_unix_ms: None,
+        archive_recursion_depth,
+        inp: Box::pin(Cursor::new(line.into_bytes())),
+        line_prefix: line_prefix.to_string(),
+        // the marker is final text; don't run it through postprocessing
+        postprocess: false,
+        config: config.clone(),
+    }
+}
+
+/// Error while copying adapter output to the final destination, split by
+/// side so callers can tell adapter failures (→ searchable marker line,
+/// issue #151) apart from output-write failures (e.g. closed pipe).
+pub enum AdapterCopyError {
+    Input(std::io::Error),
+    Output(std::io::Error),
+}
+
+/// Copy adapter output chunk by chunk; unlike `tokio::io::copy` this
+/// distinguishes read errors from write errors.
+pub async fn copy_adapter_output(
+    inp: &mut ReadBox,
+    out: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> std::result::Result<(), AdapterCopyError> {
+    use tokio::io::AsyncWriteExt;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = inp
+            .read(&mut buf)
+            .await
+            .map_err(AdapterCopyError::Input)?;
+        if n == 0 {
+            break;
+        }
+        out.write_all(&buf[..n])
+            .await
+            .map_err(AdapterCopyError::Output)?;
+    }
+    out.flush().await.map_err(AdapterCopyError::Output)?;
+    std::result::Result::Ok(())
+}
+
 pub fn loop_adapt(
     adapter: &dyn FileAdapter,
     detection_reason: FileMatcher,
@@ -395,7 +500,19 @@ pub async fn loop_adapt_inner(
     let s = stream! {
         for await file in inp {
             trace!("next file");
-            match buf_choose_adapter(file?, &[], Some(&active_adapters)).await? {
+            let file = file?;
+            // MS Office owner/lock files inside archives are never real
+            // documents — drain and skip instead of failing (issue #151)
+            if file
+                .filepath_hint
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("~$"))
+            {
+                debug!("skipping MS Office lock file {}", file.filepath_hint.to_string_lossy());
+                read_discard(file.inp).await?;
+                continue;
+            }
+            match buf_choose_adapter(file, &[], Some(&active_adapters)).await? {
                 Ret::Recurse(ai, adapter, detection_reason, _active_adapters) => {
                     if ai.archive_recursion_depth >= ai.config.max_archive_recursion.0 {
                         // some adapters (esp. zip) assume that the entry is read fully and might hang otherwise
@@ -430,4 +547,109 @@ pub async fn loop_adapt_inner(
         trace!("stream ended");
     };
     Ok(Box::pin(s))
+}
+
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::adapters::custom::CustomAdapterConfig;
+    use crate::test_utils::simple_adapt_info;
+    use std::io::Cursor;
+    use std::path::PathBuf;
+
+    /// A custom adapter that matches `.failtest` and always fails hard
+    /// (exits 1 with no output) — deterministic stand-in for e.g. pandoc
+    /// choking on a corrupt file, without needing external binaries.
+    /// A custom adapter that matches `.failtest` and always fails hard at
+    /// adapt time (its binary does not exist, so spawning fails) —
+    /// deterministic stand-in for e.g. pandoc choking on a corrupt file,
+    /// without needing external binaries.
+    fn failing_adapter_config() -> CustomAdapterConfig {
+        CustomAdapterConfig {
+            name: "failing".to_string(),
+            description: "always fails".to_string(),
+            disabled_by_default: None,
+            version: 1,
+            extensions: vec!["failtest".to_string()],
+            mimetypes: None,
+            binary: "rga-test-nonexistent-binary".to_string(),
+            args: vec![],
+            match_only_by_mime: None,
+            output_path_hint: None,
+            bail_if_empty_output: None,
+        }
+    }
+
+
+    fn config_with_failing_adapter() -> RgaConfig {
+        let mut config = RgaConfig::default();
+        config.cache.disabled = true;
+        config.custom_adapters = Some(vec![failing_adapter_config()]);
+        config
+    }
+
+    async fn preproc_to_string(filepath: &str, content: Vec<u8>, config: RgaConfig) -> Result<String> {
+        let (ai, _) = simple_adapt_info(&PathBuf::from(filepath), Box::pin(Cursor::new(content)));
+        let ai = AdaptInfo { config, ..ai };
+        let mut out = rga_preproc(ai).await?;
+        let mut buf = Vec::new();
+        out.read_to_end(&mut buf).await?;
+        Ok(String::from_utf8(buf)?)
+    }
+
+    #[tokio::test]
+    async fn hard_adapter_failure_emits_searchable_marker() -> Result<()> {
+        // a hard adapter error (not an AdapterBail) used to abort rga-preproc
+        // with a non-zero exit, making rg report a preprocessor failure and
+        // exit 2. Now it degrades to a `[rga: ...]` marker line (issue #151).
+        let text = preproc_to_string("broken.failtest", b"content".to_vec(), config_with_failing_adapter()).await?;
+        assert!(
+            text.contains("[rga: preprocessing failed"),
+            "expected marker in output: {text:?}"
+        );
+        assert!(text.contains("failing"), "expected adapter name: {text:?}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn zip_skips_office_lock_files() -> Result<()> {
+        use async_zip::{Compression, ZipEntryBuilder, base::write::ZipFileWriter};
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = ZipFileWriter::with_tokio(&mut cursor);
+        // an ordinary member that must come through unchanged
+        writer
+            .write_entry_whole(
+                ZipEntryBuilder::new("normal.txt".into(), Compression::Stored),
+                b"normal text file",
+            )
+            .await?;
+        // an MS Office owner/lock file: never a real document, must be skipped
+        writer
+            .write_entry_whole(
+                ZipEntryBuilder::new("~$lock.docx".into(), Compression::Stored),
+                b"garbage lock content",
+            )
+            .await?;
+        writer.close().await?;
+        let archive = cursor.into_inner();
+
+        let text = preproc_to_string("test.zip", archive, config_with_failing_adapter()).await?;
+        assert!(text.contains("normal text file"), "missing normal member: {text:?}");
+        assert!(
+            !text.contains("garbage lock content"),
+            "lock file content must be skipped: {text:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn one_line_error_flattens_and_trims() {
+        let err = format_err!("line1\nline2\n");
+        assert_eq!(one_line_error(&err), "line1 | line2");
+
+        let flattened = one_line_error(&anyhow::Error::msg("x".repeat(500)));
+        assert!(flattened.ends_with('…'), "{flattened:?}");
+        assert!(flattened.chars().count() <= 301, "{flattened:?}");
+    }
 }
