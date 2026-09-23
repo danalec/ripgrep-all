@@ -82,6 +82,7 @@ name = "preproc"
 harness = false
 
 [profile.release]
-debug = true
-lto = "thin"
-split-debuginfo = "packed"
+debug = "line-tables-only"
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"
