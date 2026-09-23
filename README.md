@@ -14,6 +14,9 @@
 > postproc page-break markers, legacy Word 97-2003 .doc search via antiword,
 > .rtf via pandoc, and a single-pass memchr-based line prefixer that is
 > about 35% faster on newline-dense text.
+>
+> **→ The full list of what this fork adds is maintained in [README-FORK.md](README-FORK.md)**
+> (adapters, compression formats, search-output modes, robustness fixes, branch status).
 
 rga is a line-oriented search tool that allows you to look for a regex in a multitude of file types. rga wraps the awesome [ripgrep] and enables it to search in pdf, docx, sqlite, jpg, movie subtitles (mkv, mp4), etc.
 
