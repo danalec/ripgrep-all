@@ -13,8 +13,13 @@ repository = "https://github.com/phiresky/ripgrep-all"
 version = "0.10.10"
 
 [features]
-default = ["perf-literal"]
+default = ["perf-literal", "mimalloc"]
 perf-literal = ["regex/perf-literal"]
+# mimalloc as the global allocator; measured +59-62% on archive preprocess
+# throughput and +4% on sqlite (Windows ucrt malloc is the slow baseline;
+# expect smaller but positive deltas on glibc). Neutral on spawn-bound
+# adapters (pandoc/poppler). See benches/README.md.
+mimalloc = ["dep:mimalloc"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -62,6 +67,7 @@ tree_magic = {package = "tree_magic_mini", version = "3.2.2"}
 
 infer = "0.19"
 once_cell = "1.19.0"
+mimalloc = { version = "0.1", optional = true }
 
 [dev-dependencies]
 async-recursion = "1.1.1"

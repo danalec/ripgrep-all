@@ -1,4 +1,8 @@
 use rga::adapters::*;
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use rga::preproc::*;
 use rga::print_dur;
 use ripgrep_all as rga;

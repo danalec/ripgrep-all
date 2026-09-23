@@ -1,4 +1,8 @@
 use anyhow::{Result, Context};
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use rga::adapters::custom::map_exe_error;
 use rga::adapters::*;
 use rga::config::{RgaConfig, split_args};
