@@ -59,8 +59,12 @@ fn parse_dbf(data: &[u8]) -> Result<String> {
         bail!("dbf file too small");
     }
     let version = data[0];
-    if !(0x02..=0x8b).contains(&version) || data[0] == 0x00 {
-        bail!("not a DBF file (unknown version {version:#x})");
+    // dBASE/FoxPro/Visual FoxPro versions span 0x02..0x8b plus 0xf5..0xfb
+    // (FoxPro 2.x, VFP with DBC, etc.); instead of an allowlist, accept any
+    // non-zero version and rely on the structural validation below
+    // (record size must equal the sum of field lengths) to reject junk.
+    if version == 0x00 {
+        bail!("not a DBF file (version byte is zero)");
     }
     let num_records = u32::from_le_bytes(data[4..8].try_into().unwrap());
     let header_size = u16::from_le_bytes(data[8..10].try_into().unwrap()) as usize;
@@ -240,6 +244,25 @@ mod tests {
             text,
             "dbf_version: 0x3\nrecords: 2\nfields: NAME C(10), CITY C(10)\nrows:\nNAME\tCITY\nalice\tlyon\nbob\tnantes"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dbf_accepts_foxpro_version() -> Result<()> {
+        // FoxPro 2.x uses version byte 0xf5, outside the old 0x02..=0x8b
+        // allowlist; structural validation must accept it
+        let mut data = make_dbf(&[("alice", "lyon")], false);
+        data[0] = 0xf5;
+        let (a, d) = simple_adapt_info(
+            std::path::Path::new("legacy.dbf"),
+            Box::pin(Cursor::new(data)),
+        );
+        let out = DbfAdapter.adapt(a, &d).await?;
+        let text = String::from_utf8(adapted_to_vec(out).await?)?
+            .trim()
+            .to_string();
+        assert!(text.starts_with("dbf_version: 0xf5"), "got {text}");
+        assert!(text.contains("alice\tlyon"), "got {text}");
         Ok(())
     }
 
