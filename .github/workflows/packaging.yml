@@ -19,6 +19,10 @@ jobs:
     name: pacman packages (generic + znver4)
     runs-on: ubuntu-latest
     container: archlinux:latest
+    permissions:
+      id-token: write
+      attestations: write
+      contents: write
     steps:
       - name: Install build environment
         run: |
@@ -54,6 +58,11 @@ jobs:
           done
           echo "release $GITHUB_REF_NAME did not appear in time" >&2
           exit 1
+
+      - name: Attest packages (supply chain provenance)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: packaging/arch/dist
 
       - name: Upload pacman packages
         run: gh release upload "$GITHUB_REF_NAME" packaging/arch/dist/*.pkg.tar.zst --repo "$GITHUB_REPOSITORY" --clobber

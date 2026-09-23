@@ -65,6 +65,10 @@ jobs:
     name: build-release
     needs: ["create-release"]
     runs-on: ${{ matrix.os }}
+    permissions:
+      id-token: write
+      attestations: write
+      contents: write
     env:
       # For some builds, we use cross to test on 32-bit and big-endian
       # systems.
@@ -297,6 +301,11 @@ jobs:
             tar czf "$staging.tar.gz" "$staging"
             echo "ASSET=$staging.tar.gz" >> $GITHUB_ENV
           fi
+
+      - name: Attest release asset (supply chain provenance)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.ASSET }}
 
       - name: Upload release archive
         uses: actions/upload-release-asset@v1.0.1

@@ -29,6 +29,10 @@ jobs:
   pgo-linux:
     name: PGO linux x86_64
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      attestations: write
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -60,12 +64,21 @@ jobs:
           echo "release did not appear in time" >&2
           exit 1
 
+      - name: Attest PGO asset (supply chain provenance)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist-pgo
+
       - name: Upload PGO asset
         run: gh release upload "$GITHUB_REF_NAME" dist-pgo/*.tar.gz --repo "$GITHUB_REPOSITORY" --clobber
 
   pgo-windows:
     name: PGO windows x86_64
     runs-on: windows-2025
+    permissions:
+      id-token: write
+      attestations: write
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -99,10 +112,10 @@ jobs:
           echo "release did not appear in time" >&2
           exit 1
 
-      - name: Upload PGO asset
+      - name: Repackage as zip
         shell: bash
         run: |
-          # repackage as .zip for consistency with the other windows assets
+          # .zip for consistency with the other windows assets
           cd dist-pgo
           for t in *.tar.gz; do
             d="${t%.tar.gz}"
@@ -110,5 +123,12 @@ jobs:
             powershell -Command "Compress-Archive -Path '$d/*' -DestinationPath '${d}.zip'"
             rm -rf "$d" "$t"
           done
-          cd ..
-          gh release upload "$GITHUB_REF_NAME" dist-pgo/*.zip --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Attest PGO asset (supply chain provenance)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist-pgo
+
+      - name: Upload PGO asset
+        shell: bash
+        run: gh release upload "$GITHUB_REF_NAME" dist-pgo/*.zip --repo "$GITHUB_REPOSITORY" --clobber
