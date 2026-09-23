@@ -321,9 +321,7 @@ impl FileAdapter for PlyAdapter {
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 // ---------------------------------------------------------------------------
@@ -390,11 +388,7 @@ impl<'a> FbxReader<'a> {
     }
     /// size of one null record at the current format width
     fn null_size(&self) -> usize {
-        if self.big {
-            25
-        } else {
-            13
-        }
+        if self.big { 25 } else { 13 }
     }
 }
 
@@ -439,11 +433,7 @@ fn fbx_prop_string(r: &mut FbxReader) -> Result<Option<String>> {
 }
 
 /// read one node record; returns None on a null record (list terminator)
-fn fbx_read_node(
-    r: &mut FbxReader,
-    out: &mut String,
-    depth: usize,
-) -> Result<Option<()>> {
+fn fbx_read_node(r: &mut FbxReader, out: &mut String, depth: usize) -> Result<Option<()>> {
     let record_start = r.pos;
     let end_offset = r.offset()?;
     let num_props = r.offset()?;
@@ -599,7 +589,10 @@ impl FileAdapter for VtkAdapter {
                     break; // the rest is payload
                 }
                 match (i, keyword) {
-                    (0, _) => out.push_str(&format!("vtk_version: {}\n", line.trim_start_matches("# vtk DataFile Version").trim())),
+                    (0, _) => out.push_str(&format!(
+                        "vtk_version: {}\n",
+                        line.trim_start_matches("# vtk DataFile Version").trim()
+                    )),
                     (1, _) => out.push_str(&format!("title: {}\n", line.trim())),
                     (_, "BINARY") => is_binary = true,
                     (_, "ASCII") => bail!("ascii vtk is plain text"),
@@ -607,7 +600,11 @@ impl FileAdapter for VtkAdapter {
                         dataset = Some(tokens[1].to_string());
                     }
                     (_, "DIMENSIONS" | "ORIGIN" | "SPACING" | "ASPECT_RATIO" | "EXTENT") => {
-                        out.push_str(&format!("{}: {}\n", keyword.to_lowercase(), tokens[1..].join(" ")));
+                        out.push_str(&format!(
+                            "{}: {}\n",
+                            keyword.to_lowercase(),
+                            tokens[1..].join(" ")
+                        ));
                     }
                     _ => {}
                 }
@@ -719,7 +716,10 @@ impl FileAdapter for PcdAdapter {
             if !height.is_empty() {
                 out.push_str(&format!("height: {height}\n"));
             }
-            out.push_str(&format!("points: {}\n", if points.is_empty() { "?" } else { &points }));
+            out.push_str(&format!(
+                "points: {}\n",
+                if points.is_empty() { "?" } else { &points }
+            ));
             Ok(out)
         })();
         finish(path, prefix, depth, postprocess, config, text)
@@ -800,10 +800,16 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::io::Cursor;
 
-    async fn adapt_to_string(adapter: impl FileAdapter, name: &str, data: Vec<u8>) -> Result<String> {
+    async fn adapt_to_string(
+        adapter: impl FileAdapter,
+        name: &str,
+        data: Vec<u8>,
+    ) -> Result<String> {
         let (a, d) = simple_adapt_info(std::path::Path::new(name), Box::pin(Cursor::new(data)));
         let out = adapter.adapt(a, &d).await?;
-        Ok(String::from_utf8(adapted_to_vec(out).await?)?.trim().to_string())
+        Ok(String::from_utf8(adapted_to_vec(out).await?)?
+            .trim()
+            .to_string())
     }
 
     fn make_binary_stl(header: &[u8; 80], triangles: u32) -> Vec<u8> {
@@ -851,7 +857,10 @@ mod tests {
 
     #[tokio::test]
     async fn glb_json_chunk() -> Result<()> {
-        let glb = make_glb(r#"{"asset":{"version":"2.0"},"meshes":[{"name":"cube"}]}"#, 120);
+        let glb = make_glb(
+            r#"{"asset":{"version":"2.0"},"meshes":[{"name":"cube"}]}"#,
+            120,
+        );
         let out = adapt_to_string(GlbAdapter, "scene.glb", glb).await?;
         assert!(out.contains("glb_version: 2"));
         assert!(out.contains("\"version\": \"2.0\""), "got {out}");
@@ -878,7 +887,12 @@ mod tests {
         let data = b"ply\nformat ascii 1.0\nelement vertex 1\nend_header\n0 0 0\n".to_vec();
         let (a, d) = simple_adapt_info(std::path::Path::new("a.ply"), Box::pin(Cursor::new(data)));
         let res = PlyAdapter.adapt(a, &d).await;
-        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
     }
 
     fn make_fbx(version: u32, node_name: &str, prop: &str) -> Vec<u8> {
@@ -916,7 +930,12 @@ mod tests {
         let data = b"; FBX 7.4.0\nFBXHeaderExtension:  {\n}".to_vec();
         let (a, d) = simple_adapt_info(std::path::Path::new("a.fbx"), Box::pin(Cursor::new(data)));
         let res = FbxAdapter.adapt(a, &d).await;
-        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -940,7 +959,12 @@ mod tests {
         let data = b"# .PCD v0.7\nFIELDS x y z\nDATA ascii\n0 0 0\n".to_vec();
         let (a, d) = simple_adapt_info(std::path::Path::new("a.pcd"), Box::pin(Cursor::new(data)));
         let res = PcdAdapter.adapt(a, &d).await;
-        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -981,7 +1005,12 @@ mod tests {
         data[0..4].copy_from_slice(b"NOPE");
         let (a, d) = simple_adapt_info(std::path::Path::new("x.las"), Box::pin(Cursor::new(data)));
         let res = LasAdapter.adapt(a, &d).await;
-        assert!(res.err().expect("should fail").downcast_ref::<AdapterBail>().is_some());
+        assert!(
+            res.err()
+                .expect("should fail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1006,6 +1035,11 @@ mod tests {
         let data = b"# vtk DataFile Version 3.0\nt\nASCII\nDATASET POLYDATA\n".to_vec();
         let (a, d) = simple_adapt_info(std::path::Path::new("a.vtk"), Box::pin(Cursor::new(data)));
         let res = VtkAdapter.adapt(a, &d).await;
-        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
     }
 }
