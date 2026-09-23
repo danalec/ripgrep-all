@@ -3,6 +3,7 @@ pub mod custom;
 pub mod decompress;
 pub mod ffmpeg;
 pub mod fits;
+pub mod geodata;
 pub mod mbox;
 pub mod parquet;
 pub mod postproc;
@@ -186,6 +187,8 @@ pub fn get_all_adapters(custom_adapters: Option<Vec<CustomAdapterConfig>>) -> Ad
         Arc::new(tabular::DbfAdapter::new()),
         Arc::new(fits::FitsAdapter::new()),
         Arc::new(parquet::ParquetAdapter::new()),
+        Arc::new(geodata::ShpAdapter::new()),
+        Arc::new(geodata::TiffAdapter::new()),
     ];
     adapters.extend(
         BUILTIN_SPAWNING_ADAPTERS
