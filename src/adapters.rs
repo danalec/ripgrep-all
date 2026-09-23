@@ -1,4 +1,5 @@
 pub mod antiword;
+pub mod cpio;
 pub mod custom;
 pub mod decompress;
 pub mod ffmpeg;
@@ -189,6 +190,7 @@ pub fn get_all_adapters(custom_adapters: Option<Vec<CustomAdapterConfig>>) -> Ad
         Arc::new(mbox::MboxAdapter::new()),
         Arc::new(antiword::AntiwordAdapter::new()),
         Arc::new(tar::TarAdapter::new()),
+        Arc::new(cpio::CpioAdapter::new()),
         Arc::new(sqlite::SqliteAdapter::new()),
         Arc::new(tabular::DbfAdapter::new()),
         Arc::new(fits::FitsAdapter::new()),

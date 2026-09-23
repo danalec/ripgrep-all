@@ -434,12 +434,67 @@ mod test {
             let (mut ai, reason) =
                 simple_adapt_info(&path, Box::pin(std::io::Cursor::new(bytes.clone())));
             ai.is_real_file = is_real_file;
-            let output = adapted_to_vec(loop_adapt(&ZipAdapter::new(), reason, ai, crate::adapters::get_all_adapters(None).0).await?).await?;
+            let output = adapted_to_vec(
+                loop_adapt(
+                    &ZipAdapter::new(),
+                    reason,
+                    ai,
+                    crate::adapters::get_all_adapters(None).0,
+                )
+                .await?,
+            )
+            .await?;
             assert_eq!(
                 String::from_utf8(output)?,
                 "PREFIX:dir/first.txt: first\nPREFIX:second.txt: second\n"
             );
         }
+        Ok(())
+    }
+
+    /// ugrep-parity checklist: every zip compression method ugrep supports
+    /// (stored, deflate, bzip2, lzma, xz, zstd) must round-trip through the
+    /// adapter — async-zip feature `full` enables all of them
+    #[tokio::test]
+    async fn all_compression_methods_roundtrip() -> Result<()> {
+        let methods = [
+            (Compression::Stored, "stored"),
+            (Compression::Deflate, "deflate"),
+            (Compression::Bz, "bzip2"),
+            (Compression::Lzma, "lzma"),
+            (Compression::Xz, "xz"),
+            (Compression::Zstd, "zstd"),
+        ];
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = ZipFileWriter::with_tokio(&mut cursor);
+        let mut expected = String::new();
+        for (method, name) in methods {
+            writer
+                .write_entry_whole(
+                    ZipEntryBuilder::new(format!("{name}.txt").into(), method),
+                    format!("content via {name}").as_bytes(),
+                )
+                .await?;
+            expected.push_str(&format!("PREFIX:{name}.txt: content via {name}\n"));
+        }
+        writer.close().await?;
+        let bytes = cursor.into_inner();
+
+        let (ai, reason) = simple_adapt_info(
+            &PathBuf::from("methods.zip"),
+            Box::pin(std::io::Cursor::new(bytes)),
+        );
+        let output = adapted_to_vec(
+            loop_adapt(
+                &ZipAdapter::new(),
+                reason,
+                ai,
+                crate::adapters::get_all_adapters(None).0,
+            )
+            .await?,
+        )
+        .await?;
+        assert_eq!(String::from_utf8(output)?, expected);
         Ok(())
     }
 
@@ -455,7 +510,16 @@ mod test {
         let path = dir.path().join("corrupt.zip");
         tokio::fs::write(&path, bytes).await?;
         let (ai, reason) = simple_fs_adapt_info(&path).await?;
-        let result = adapted_to_vec(loop_adapt(&ZipAdapter::new(), reason, ai, crate::adapters::get_all_adapters(None).0).await?).await;
+        let result = adapted_to_vec(
+            loop_adapt(
+                &ZipAdapter::new(),
+                reason,
+                ai,
+                crate::adapters::get_all_adapters(None).0,
+            )
+            .await?,
+        )
+        .await;
         assert!(
             result.is_err(),
             "corrupted ZIP content must fail validation"
@@ -467,7 +531,16 @@ mod test {
     async fn only_seek_zip_fs() -> Result<()> {
         let zip = test_data_dir().join("only-seek-zip.zip");
         let (a, d) = simple_fs_adapt_info(&zip).await?;
-        let _v = adapted_to_vec(loop_adapt(&ZipAdapter::new(), d, a, crate::adapters::get_all_adapters(None).0).await?).await?;
+        let _v = adapted_to_vec(
+            loop_adapt(
+                &ZipAdapter::new(),
+                d,
+                a,
+                crate::adapters::get_all_adapters(None).0,
+            )
+            .await?,
+        )
+        .await?;
         Ok(())
     }
 
@@ -480,7 +553,10 @@ mod test {
             &PathBuf::from("outer.zip"),
             Box::pin(std::io::Cursor::new(zipfile)),
         );
-        let buf = adapted_to_vec(loop_adapt(&adapter, d, a, crate::adapters::get_all_adapters(None).0).await?).await?;
+        let buf = adapted_to_vec(
+            loop_adapt(&adapter, d, a, crate::adapters::get_all_adapters(None).0).await?,
+        )
+        .await?;
 
         assert_eq!(
             String::from_utf8(buf)?,
