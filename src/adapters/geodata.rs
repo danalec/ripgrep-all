@@ -281,7 +281,11 @@ fn parse_tiff(data: &[u8]) -> Result<String> {
         big_endian,
         big,
     };
-    let mut ifd_off = if big { r.u64(8)? as usize } else { r.u32(4)? as usize };
+    let mut ifd_off = if big {
+        r.u64(8)? as usize
+    } else {
+        r.u32(4)? as usize
+    };
     let mut out = String::new();
     let mut visited = 0;
     // follow the IFD chain (main + subIFDs), bounded
@@ -318,7 +322,9 @@ fn parse_tiff(data: &[u8]) -> Result<String> {
                         .trim_end_matches('\0')
                         .trim()
                         .to_string();
-                    if !s.is_empty() && s.chars().filter(|c| !c.is_control()).count() == s.chars().count() {
+                    if !s.is_empty()
+                        && s.chars().filter(|c| !c.is_control()).count() == s.chars().count()
+                    {
                         out.push_str(&format!("tag{tag}: {s}\n"));
                     }
                 }
@@ -417,7 +423,9 @@ mod tests {
     ) -> Result<String> {
         let (a, d) = simple_adapt_info(std::path::Path::new(name), Box::pin(Cursor::new(data)));
         let out = adapter.adapt(a, &d).await?;
-        Ok(String::from_utf8(adapted_to_vec(out).await?)?.trim().to_string())
+        Ok(String::from_utf8(adapted_to_vec(out).await?)?
+            .trim()
+            .to_string())
     }
 
     fn make_shp(shape_type: u32, records: &[u32]) -> Vec<u8> {
@@ -457,7 +465,12 @@ mod tests {
             Box::pin(Cursor::new(vec![0u8; 200])),
         );
         let res = ShpAdapter.adapt(a, &d).await;
-        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
     }
 
     /// minimal little-endian classic TIFF with one ASCII tag (ImageDescription
@@ -493,6 +506,11 @@ mod tests {
             Box::pin(Cursor::new(vec![0u8; 100])),
         );
         let res = TiffAdapter.adapt(a, &d).await;
-        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
     }
 }
