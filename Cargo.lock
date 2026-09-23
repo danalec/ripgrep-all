@@ -1415,6 +1415,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lz4_flex"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "lzma-rust2"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1499,6 +1508,12 @@ name = "multiversion_no_op"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
+
+[[package]]
+name = "newtua-lzw-z"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26065957b43205ad861c0e90268eb50fe550c26790abc855fc861edcc7ed28a8"
 
 [[package]]
 name = "nom"
@@ -1915,11 +1930,14 @@ dependencies = [
  "infer",
  "json_comments",
  "lazy_static",
+ "liblzma",
  "log",
+ "lz4_flex",
  "mailparse",
  "memchr",
  "mimalloc",
  "mime2ext",
+ "newtua-lzw-z",
  "once_cell",
  "open",
  "paste",
@@ -2425,6 +2443,12 @@ dependencies = [
  "nom",
  "petgraph",
 ]
+
+[[package]]
+name = "twox-hash"
+version = "2.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
 
 [[package]]
 name = "typenum"
