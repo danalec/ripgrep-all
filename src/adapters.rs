@@ -183,6 +183,8 @@ pub fn get_all_adapters(custom_adapters: Option<Vec<CustomAdapterConfig>>) -> Ad
         Arc::new(sqlite::SqliteAdapter::new()),
         Arc::new(llm::GgufAdapter::new()),
         Arc::new(llm::SafetensorsAdapter::new()),
+        Arc::new(llm::NpyAdapter::new()),
+        Arc::new(llm::ProtobufAdapter::new()),
     ];
     adapters.extend(
         BUILTIN_SPAWNING_ADAPTERS

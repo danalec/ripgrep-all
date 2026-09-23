@@ -200,6 +200,14 @@ Adapters:
   Extracts tensor names, dtypes, shapes and __metadata__ from Hugging Face Safetensors files  
    Extensions: .safetensors
 
+- **npy**
+  Extracts the dtype, shape and memory-layout header from NumPy .npy array files (data payload is not decoded)  
+   Extensions: .npy
+
+- **protobuf**
+  Walks the protobuf wire format and extracts field strings (node/op names, metadata) from ONNX and other protobuf model files  
+   Extensions: .onnx, .pb
+
 The following adapters are disabled by default, and can be enabled using '--rga-adapters=+foo,bar':
 
 - **mail**

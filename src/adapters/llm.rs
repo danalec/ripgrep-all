@@ -336,6 +336,256 @@ impl FileAdapter for SafetensorsAdapter {
     }
 }
 
+// ---------------------------------------------------------------------------
+// NPY (NumPy array header)
+// ---------------------------------------------------------------------------
+
+lazy_static! {
+    static ref NPY_META: AdapterMeta = meta(
+        "npy",
+        "Extracts the dtype, shape and memory-layout header from NumPy .npy array files (data payload is not decoded)",
+        &["npy"]
+    );
+}
+
+#[derive(Default)]
+pub struct NpyAdapter;
+impl NpyAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl GetMetadata for NpyAdapter {
+    fn metadata(&self) -> &AdapterMeta {
+        &NPY_META
+    }
+}
+
+fn parse_npy(data: &[u8]) -> Result<String> {
+    if data.len() < 10 || &data[0..6] != b"\x93NUMPY" {
+        bail!("not an NPY file (bad magic)");
+    }
+    let major = data[6];
+    let (header_len, header_start) = match major {
+        1 => (
+            u16::from_le_bytes(data[8..10].try_into().unwrap()) as usize,
+            10,
+        ),
+        2 | 3 => {
+            if data.len() < 12 {
+                bail!("npy header truncated");
+            }
+            (
+                u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize,
+                12,
+            )
+        }
+        other => bail!("unsupported npy format version {other}"),
+    };
+    if header_start + header_len > data.len() {
+        bail!("npy header overruns file");
+    }
+    let header = String::from_utf8_lossy(&data[header_start..header_start + header_len]);
+    // the header is a python dict literal like
+    // {'descr': '<f4', 'fortran_order': False, 'shape': (1000, 768), }
+    let extract = |key: &str| -> Option<String> {
+        let pos = header.find(&format!("'{key}':"))?;
+        let rest = header[pos + key.len() + 4..].trim_start();
+        let end = match rest.chars().next() {
+            Some('(') => {
+                // tuple: scan to the matching close paren
+                let mut depth = 0;
+                rest.find(|c| {
+                    if c == '(' {
+                        depth += 1;
+                    }
+                    if c == ')' {
+                        depth -= 1;
+                    }
+                    depth == 0
+                })?
+                    + 1
+            }
+            Some('\'') => rest[1..].find('\'')? + 2,
+            _ => rest
+                .find([',', '\n', '}'])
+                .unwrap_or(rest.len()),
+        };
+        Some(rest[..end].trim().trim_matches('\'').to_string())
+    };
+    let descr = extract("descr").ok_or_else(|| format_err!("npy header has no descr"))?;
+    let fortran = extract("fortran_order").unwrap_or_else(|| "?".into());
+    let shape = extract("shape").ok_or_else(|| format_err!("npy header has no shape"))?;
+    Ok(format!(
+        "descr: {descr}\nfortran_order: {fortran}\nshape: {shape}\n"
+    ))
+}
+
+#[async_trait]
+impl FileAdapter for NpyAdapter {
+    async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
+        let (data, filepath_hint, prefix, depth, postprocess, config) = read_input!(ai);
+        let text = parse_npy(&data)
+            .map_err(|e| adapter_bail(format!("npy: {e}")))?;
+        text_result(filepath_hint, prefix, depth, postprocess, config, text)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic protobuf string extractor (ONNX, TensorFlow .pb, SentencePiece ...)
+// ---------------------------------------------------------------------------
+
+lazy_static! {
+    static ref PROTOBUF_META: AdapterMeta = AdapterMeta {
+        name: "protobuf".to_owned(),
+        version: 1,
+        description: "Walks the protobuf wire format and extracts field strings (node/op names, metadata) from ONNX and other protobuf model files".to_owned(),
+        recurses: true,
+        fast_matchers: vec![
+            FastFileMatcher::FileExtension("onnx".to_string()),
+            FastFileMatcher::FileExtension("pb".to_string()),
+        ],
+        slow_matchers: None,
+        keep_fast_matchers_if_accurate: true,
+        disabled_by_default: false,
+    };
+}
+
+#[derive(Default)]
+pub struct ProtobufAdapter;
+impl ProtobufAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl GetMetadata for ProtobufAdapter {
+    fn metadata(&self) -> &AdapterMeta {
+        &PROTOBUF_META
+    }
+}
+
+const PROTO_MAX_LINES: usize = 100_000;
+
+fn read_varint(data: &[u8], pos: &mut usize) -> Result<u64> {
+    let mut result: u64 = 0;
+    for shift in (0..70).step_by(7) {
+        if *pos >= data.len() {
+            bail!("protobuf: truncated varint");
+        }
+        let byte = data[*pos];
+        *pos += 1;
+        result |= ((byte & 0x7f) as u64) << shift;
+        if byte & 0x80 == 0 {
+            return Ok(result);
+        }
+    }
+    bail!("protobuf: varint too long")
+}
+
+/// is this byte slice a plausible human-authored string field?
+fn looks_like_string(bytes: &[u8]) -> bool {
+    if bytes.len() < 2 || bytes.len() > 512 || bytes.contains(&0) {
+        return false;
+    }
+    let s = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let printable = s
+        .chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .count();
+    printable == s.chars().count()
+}
+
+/// try to interpret `bytes` as a nested message; returns how many strings it
+/// contained if it parsed strictly to the end
+fn protobuf_walk(
+    data: &[u8],
+    depth: usize,
+    out: &mut String,
+    lines: &mut usize,
+) -> Result<usize> {
+    let mut pos = 0;
+    let mut strings = 0;
+    while pos < data.len() {
+        if *lines >= PROTO_MAX_LINES {
+            return Ok(strings);
+        }
+        let tag = read_varint(data, &mut pos)?;
+        if tag == 0 || tag > u32::MAX as u64 {
+            bail!("protobuf: invalid tag {tag}");
+        }
+        let field = tag >> 3;
+        match tag & 7 {
+            0 => {
+                read_varint(data, &mut pos)?;
+            }
+            1 => {
+                if pos + 8 > data.len() {
+                    bail!("protobuf: truncated fixed64");
+                }
+                pos += 8;
+            }
+            5 => {
+                if pos + 4 > data.len() {
+                    bail!("protobuf: truncated fixed32");
+                }
+                pos += 4;
+            }
+            2 => {
+                let len = read_varint(data, &mut pos)? as usize;
+                if pos + len > data.len() {
+                    bail!("protobuf: length-delimited field overruns buffer");
+                }
+                let bytes = &data[pos..pos + len];
+                pos += len;
+                if looks_like_string(bytes) {
+                    strings += 1;
+                    *lines += 1;
+                    out.push_str(&format!(
+                        "field{field}: {}\n",
+                        String::from_utf8_lossy(bytes)
+                    ));
+                } else if depth < 6 {
+                    let mut nested = String::new();
+                    let mut nested_lines = 0;
+                    if protobuf_walk(bytes, depth + 1, &mut nested, &mut nested_lines).is_ok()
+                        && !nested.is_empty()
+                    {
+                        for line in nested.lines() {
+                            out.push_str(&format!("field{field}.{line}\n"));
+                        }
+                        *lines += nested_lines;
+                    }
+                }
+            }
+            other => bail!("protobuf: unsupported wire type {other}"),
+        }
+    }
+    Ok(strings)
+}
+
+fn parse_protobuf(data: &[u8]) -> Result<String> {
+    let mut out = String::new();
+    let mut lines = 0;
+    protobuf_walk(data, 0, &mut out, &mut lines)?;
+    if out.is_empty() {
+        bail!("protobuf: no string fields found");
+    }
+    Ok(out)
+}
+
+#[async_trait]
+impl FileAdapter for ProtobufAdapter {
+    async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
+        let (data, filepath_hint, prefix, depth, postprocess, config) = read_input!(ai);
+        let text = parse_protobuf(&data)
+            .map_err(|e| adapter_bail(format!("protobuf: {e}")))?;
+        text_result(filepath_hint, prefix, depth, postprocess, config, text)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,5 +672,85 @@ mod tests {
             "format: pt\ntensor bias: dtype=F32 shape=[3]\ntensor weight: dtype=F16 shape=[2, 3]"
         );
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // NPY
+    // -----------------------------------------------------------------------
+
+    fn make_npy(header_dict: &str, payload: usize) -> Vec<u8> {
+        let mut v = b"\x93NUMPY\x01\x00".to_vec();
+        v.extend_from_slice(&(header_dict.len() as u16).to_le_bytes());
+        v.extend_from_slice(header_dict.as_bytes());
+        v.resize(v.len() + payload, 0);
+        v
+    }
+
+    #[tokio::test]
+    async fn npy_header_v1() -> Result<()> {
+        let data = make_npy("{'descr': '<f4', 'fortran_order': False, 'shape': (1000, 768), }", 1000 * 768 * 4);
+        let out = adapt_to_string(NpyAdapter, "embeddings.npy", data).await?;
+        assert_eq!(out, "descr: <f4\nfortran_order: False\nshape: (1000, 768)");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn npy_rejects_bad_magic() {
+        let data = b"\x94NUMPY garbage".to_vec();
+        let (a, d) = simple_adapt_info(std::path::Path::new("x.npy"), Box::pin(Cursor::new(data)));
+        let res = NpyAdapter.adapt(a, &d).await;
+        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // Protobuf
+    // -----------------------------------------------------------------------
+
+    fn pb_varint(mut v: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let mut b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v != 0 {
+                b |= 0x80;
+            }
+            out.push(b);
+            if v == 0 {
+                break;
+            }
+        }
+        out
+    }
+
+    fn pb_string_field(field: u64, s: &str) -> Vec<u8> {
+        let mut v = pb_varint(field << 3 | 2);
+        v.extend_from_slice(&pb_varint(s.len() as u64));
+        v.extend_from_slice(s.as_bytes());
+        v
+    }
+
+    #[tokio::test]
+    async fn protobuf_strings_nested() -> Result<()> {
+        // field 1: "llama"; field 2: nested message {field 1: "quantized"};
+        // field 3: varint 7
+        let mut data = pb_string_field(1, "llama");
+        let mut nested = pb_string_field(1, "quantized");
+        nested.extend_from_slice(&pb_varint(3 << 3));
+        nested.extend_from_slice(&pb_varint(7));
+        data.extend_from_slice(&pb_varint(2 << 3 | 2));
+        data.extend_from_slice(&pb_varint(nested.len() as u64));
+        data.extend_from_slice(&nested);
+        let out = adapt_to_string(ProtobufAdapter, "model.onnx", data).await?;
+        assert!(out.contains("field1: llama"), "got {out}");
+        assert!(out.contains("quantized"), "got {out}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn protobuf_rejects_non_protobuf() {
+        let data = vec![0xffu8; 100];
+        let (a, d) = simple_adapt_info(std::path::Path::new("x.pb"), Box::pin(Cursor::new(data)));
+        let res = ProtobufAdapter.adapt(a, &d).await;
+        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
     }
 }
