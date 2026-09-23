@@ -1,0 +1,114 @@
+# PGO builds
+#
+# On every release tag, builds Profile-Guided-Optimized variants of the two
+# x86_64 flagship targets and attaches them to the release as `-pgo` assets:
+#   ripgrep_all-v<tag>-x86_64-unknown-linux-gnu-pgo.tar.gz
+#   ripgrep_all-v<tag>-x86_64-pc-windows-msvc-pgo.zip
+#
+# The PGO pipeline (packaging/pgo/build-pgo.sh): instrumented build, train on
+# the bench corpus (cold-cache preprocess of every adapter file plus a real
+# search), llvm-profdata merge, final -Cprofile-use build.
+#
+# Promotion rule (docs/ROADMAP-PERF-PACKAGING.md): a -pgo variant only becomes
+# the default asset once benches/preproc shows a >= 5% median win over the
+# non-PGO build of the same commit on CI. Until then they are extra assets.
+name: pgo
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+permissions:
+  contents: write
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  pgo-linux:
+    name: PGO linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils pandoc
+          pip install reportlab python-docx
+
+      - name: Build PGO variant
+        run: bash packaging/pgo/build-pgo.sh x86_64-unknown-linux-gnu dist-pgo "${GITHUB_REF_NAME#v}"
+
+      - name: Wait for the GitHub release
+        run: |
+          for i in $(seq 1 60); do
+            if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "release $GITHUB_REF_NAME exists"
+              exit 0
+            fi
+            [ "$i" = 1 ] && echo "waiting for release $GITHUB_REF_NAME..."
+            sleep 30
+          done
+          echo "release did not appear in time" >&2
+          exit 1
+
+      - name: Upload PGO asset
+        run: gh release upload "$GITHUB_REF_NAME" dist-pgo/*.tar.gz --repo "$GITHUB_REPOSITORY" --clobber
+
+  pgo-windows:
+    name: PGO windows x86_64
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install tools
+        run: |
+          pip install reportlab python-docx
+          # poppler + pandoc for training coverage of those adapters
+          choco install poppler pandoc --no-progress -y
+
+      - name: Build PGO variant
+        shell: bash
+        run: bash packaging/pgo/build-pgo.sh x86_64-pc-windows-msvc dist-pgo "${GITHUB_REF_NAME#v}"
+
+      - name: Wait for the GitHub release
+        shell: bash
+        run: |
+          for i in $(seq 1 60); do
+            if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "release $GITHUB_REF_NAME exists"
+              exit 0
+            fi
+            [ "$i" = 1 ] && echo "waiting for release $GITHUB_REF_NAME..."
+            sleep 30
+          done
+          echo "release did not appear in time" >&2
+          exit 1
+
+      - name: Upload PGO asset
+        shell: bash
+        run: |
+          # repackage as .zip for consistency with the other windows assets
+          cd dist-pgo
+          for t in *.tar.gz; do
+            d="${t%.tar.gz}"
+            mkdir -p "$d" && tar xzf "$t" -C "$d" --strip-components=1
+            powershell -Command "Compress-Archive -Path '$d/*' -DestinationPath '${d}.zip'"
+            rm -rf "$d" "$t"
+          done
+          cd ..
+          gh release upload "$GITHUB_REF_NAME" dist-pgo/*.zip --repo "$GITHUB_REPOSITORY" --clobber
