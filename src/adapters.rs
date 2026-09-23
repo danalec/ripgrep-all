@@ -4,6 +4,7 @@ pub mod decompress;
 pub mod ffmpeg;
 pub mod fits;
 pub mod geodata;
+pub mod llm;
 pub mod mbox;
 pub mod parquet;
 pub mod postproc;
@@ -159,7 +160,9 @@ struct AdapterOverride {
     meta: AdapterMeta,
 }
 impl GetMetadata for AdapterOverride {
-    fn metadata(&self) -> &AdapterMeta { &self.meta }
+    fn metadata(&self) -> &AdapterMeta {
+        &self.meta
+    }
 }
 #[async_trait]
 impl FileAdapter for AdapterOverride {
@@ -197,6 +200,11 @@ pub fn get_all_adapters(custom_adapters: Option<Vec<CustomAdapterConfig>>) -> Ad
         Arc::new(threed::PcdAdapter::new()),
         Arc::new(threed::LasAdapter::new()),
         Arc::new(threed::VtkAdapter::new()),
+        Arc::new(llm::GgufAdapter::new()),
+        Arc::new(llm::SafetensorsAdapter::new()),
+        Arc::new(llm::NpyAdapter::new()),
+        Arc::new(llm::ProtobufAdapter::new()),
+        Arc::new(llm::TiktokenAdapter::new()),
     ];
     adapters.extend(
         BUILTIN_SPAWNING_ADAPTERS
@@ -373,12 +381,7 @@ mod test {
             1,
             "custom adapter named like a builtin must replace it, not conflict"
         );
-        assert!(
-            popplers[0]
-                .metadata()
-                .description
-                .contains("test adapter")
-        );
+        assert!(popplers[0].metadata().description.contains("test adapter"));
     }
 
     #[test]
@@ -393,20 +396,32 @@ mod test {
         let mut cfg = RgaConfig::default();
         cfg.zip_extensions = Some(vec!["zzz".to_string()]);
         let adapters = get_adapters_filtered(None, &Vec::<String>::new(), &cfg).unwrap();
-        let zip = adapters.into_iter().find(|a| a.metadata().name == "zip").unwrap();
+        let zip = adapters
+            .into_iter()
+            .find(|a| a.metadata().name == "zip")
+            .unwrap();
         let fm = &zip.metadata().fast_matchers;
         assert!(fm.len() == 1);
-        match &fm[0] { FastFileMatcher::FileExtension(s) => assert_eq!(s, "zzz") };
+        match &fm[0] {
+            FastFileMatcher::FileExtension(s) => assert_eq!(s, "zzz"),
+        };
     }
     #[test]
     fn ffmpeg_extensions_override_applied() {
         let mut cfg = RgaConfig::default();
         cfg.ffmpeg_extensions = Some(vec!["abc".to_string(), "DEF".to_string()]);
         let adapters = get_adapters_filtered(None, &Vec::<String>::new(), &cfg).unwrap();
-        let ff = adapters.into_iter().find(|a| a.metadata().name == "ffmpeg").unwrap();
+        let ff = adapters
+            .into_iter()
+            .find(|a| a.metadata().name == "ffmpeg")
+            .unwrap();
         let fm = &ff.metadata().fast_matchers;
         assert!(fm.len() == 2);
-        match &fm[0] { FastFileMatcher::FileExtension(s) => assert_eq!(s, "abc") };
-        match &fm[1] { FastFileMatcher::FileExtension(s) => assert_eq!(s, "DEF") };
+        match &fm[0] {
+            FastFileMatcher::FileExtension(s) => assert_eq!(s, "abc"),
+        };
+        match &fm[1] {
+            FastFileMatcher::FileExtension(s) => assert_eq!(s, "DEF"),
+        };
     }
 }
