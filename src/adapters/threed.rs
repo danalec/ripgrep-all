@@ -546,6 +546,174 @@ impl FileAdapter for FbxAdapter {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PCD (Point Cloud Data, ROS/robotics)
+// ---------------------------------------------------------------------------
+
+lazy_static! {
+    static ref PCD_META: AdapterMeta = meta(
+        "pcd",
+        "Extracts the field/point structure from binary PCD point-cloud files (ASCII PCD is searched as plain text)",
+        &["pcd"]
+    );
+}
+
+#[derive(Default)]
+pub struct PcdAdapter;
+impl PcdAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl GetMetadata for PcdAdapter {
+    fn metadata(&self) -> &AdapterMeta {
+        &PCD_META
+    }
+}
+
+#[async_trait]
+impl FileAdapter for PcdAdapter {
+    async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
+        let (data, path, prefix, depth, postprocess, config) = read_input!(ai);
+        let text = (|| {
+            // the PCD header is ASCII even in binary files; it ends with the
+            // DATA line, after which the payload begins
+            let data_line = find_subslice(&data, b"DATA ")
+                .or_else(|| find_subslice(&data, b"DATA\n"))
+                .or_else(|| find_subslice(&data, b"DATA\r"))
+                .ok_or_else(|| anyhow::anyhow!("pcd: no DATA line in header"))?;
+            let header = String::from_utf8_lossy(&data[..data_line]).into_owned();
+            let mut fields = String::new();
+            let mut sizes = String::new();
+            let mut types = String::new();
+            let mut count = String::new();
+            let mut width = String::new();
+            let mut height = String::new();
+            let mut points = String::new();
+            let mut data_kind = "";
+            for line in header.lines() {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                match tokens.first().copied() {
+                    Some("FIELDS") | Some("COLUMNS") => fields = tokens[1..].join(" "),
+                    Some("SIZE") => sizes = tokens[1..].join(" "),
+                    Some("TYPE") => types = tokens[1..].join(" "),
+                    Some("COUNT") => count = tokens[1..].join(" "),
+                    Some("WIDTH") => width = tokens.get(1).copied().unwrap_or("").to_string(),
+                    Some("HEIGHT") => height = tokens.get(1).copied().unwrap_or("").to_string(),
+                    Some("POINTS") => points = tokens.get(1).copied().unwrap_or("").to_string(),
+                    Some("#") | Some("VERSION") | Some("VIEWPOINT") | None => {}
+                    _ => {}
+                }
+            }
+            // locate the DATA keyword itself and read its argument
+            let after = &data[data_line..];
+            let line_end = after
+                .iter()
+                .position(|b| *b == b'\n')
+                .unwrap_or(after.len());
+            let data_line_str = String::from_utf8_lossy(&after[..line_end]);
+            let data_tokens: Vec<&str> = data_line_str.split_whitespace().collect();
+            if data_tokens.len() >= 2 {
+                data_kind = data_tokens[1];
+            }
+            match data_kind {
+                "ascii" => bail!("ascii pcd is plain text"),
+                "binary" | "binary_compressed" => {}
+                other => bail!("pcd: unsupported DATA type {other:?}"),
+            }
+            let mut out = format!("data: {data_kind}\n");
+            if !fields.is_empty() {
+                out.push_str(&format!("fields: {fields}\n"));
+            }
+            if !types.is_empty() {
+                out.push_str(&format!("types: {types}\n"));
+            }
+            if !sizes.is_empty() {
+                out.push_str(&format!("sizes: {sizes}\n"));
+            }
+            if !count.is_empty() {
+                out.push_str(&format!("count: {count}\n"));
+            }
+            if !width.is_empty() {
+                out.push_str(&format!("width: {width}\n"));
+            }
+            if !height.is_empty() {
+                out.push_str(&format!("height: {height}\n"));
+            }
+            out.push_str(&format!("points: {}\n", if points.is_empty() { "?" } else { &points }));
+            Ok(out)
+        })();
+        finish(path, prefix, depth, postprocess, config, text)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LAS / LAZ (lidar point clouds)
+// ---------------------------------------------------------------------------
+
+lazy_static! {
+    static ref LAS_META: AdapterMeta = AdapterMeta {
+        name: "las".to_owned(),
+        version: 1,
+        description: "Extracts version, point format, counts and bounding box from LAS/LAZ lidar files (header only; point payloads are not decoded)".to_owned(),
+        recurses: true,
+        fast_matchers: vec![
+            FastFileMatcher::FileExtension("las".to_string()),
+            FastFileMatcher::FileExtension("laz".to_string()),
+        ],
+        slow_matchers: None,
+        keep_fast_matchers_if_accurate: true,
+        disabled_by_default: false,
+    };
+}
+
+#[derive(Default)]
+pub struct LasAdapter;
+impl LasAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl GetMetadata for LasAdapter {
+    fn metadata(&self) -> &AdapterMeta {
+        &LAS_META
+    }
+}
+
+fn parse_las(data: &[u8]) -> Result<String> {
+    if data.len() < 243 || &data[0..4] != b"LASF" {
+        bail!("not a LAS file (bad magic or truncated header)");
+    }
+    let major = data[24];
+    let minor = data[25];
+    let point_format = data[104] & 0x3f; // high bits are flags in LAS >= 1.4
+    let record_len = u16::from_le_bytes(data[105..107].try_into().unwrap());
+    let legacy_count = u32::from_le_bytes(data[107..111].try_into().unwrap());
+    // LAS 1.4 stores the true count as u64 at offset 247 when it overflows
+    let count = if legacy_count == 0 && data.len() >= 255 {
+        u64::from_le_bytes(data[247..255].try_into().unwrap())
+    } else {
+        legacy_count as u64
+    };
+    let get_f64 = |off: usize| f64::from_le_bytes(data[off..off + 8].try_into().unwrap());
+    let (scale_x, scale_y, scale_z) = (get_f64(131), get_f64(139), get_f64(147));
+    let (max_x, min_x) = (get_f64(179), get_f64(191));
+    let (max_y, min_y) = (get_f64(203), get_f64(215));
+    let (max_z, min_z) = (get_f64(227), get_f64(235));
+    Ok(format!(
+        "las_version: {major}.{minor}\npoint_format: {point_format}\nrecord_length: {record_len}\npoints: {count}\nscale: {scale_x} {scale_y} {scale_z}\nmin_x: {min_x}\nmax_x: {max_x}\nmin_y: {min_y}\nmax_y: {max_y}\nmin_z: {min_z}\nmax_z: {max_z}\n"
+    ))
+}
+
+#[async_trait]
+impl FileAdapter for LasAdapter {
+    async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
+        let (data, path, prefix, depth, postprocess, config) = read_input!(ai);
+        let text = parse_las(&data);
+        finish(path, prefix, depth, postprocess, config, text)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -670,5 +838,70 @@ mod tests {
         let (a, d) = simple_adapt_info(std::path::Path::new("a.fbx"), Box::pin(Cursor::new(data)));
         let res = FbxAdapter.adapt(a, &d).await;
         assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // PCD
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn pcd_binary_header() -> Result<()> {
+        let header = b"# .PCD v0.7\nVERSION 0.7\nFIELDS x y z intensity\nSIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\nWIDTH 100\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS 100\nDATA binary\n";
+        let mut data = header.to_vec();
+        data.resize(header.len() + 100 * 16, 0);
+        let out = adapt_to_string(PcdAdapter, "scan.pcd", data).await?;
+        assert!(out.contains("fields: x y z intensity"), "got {out}");
+        assert!(out.contains("points: 100"));
+        assert!(out.contains("data: binary"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pcd_ascii_bails() {
+        let data = b"# .PCD v0.7\nFIELDS x y z\nDATA ascii\n0 0 0\n".to_vec();
+        let (a, d) = simple_adapt_info(std::path::Path::new("a.pcd"), Box::pin(Cursor::new(data)));
+        let res = PcdAdapter.adapt(a, &d).await;
+        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // LAS / LAZ
+    // -----------------------------------------------------------------------
+
+    fn make_las() -> Vec<u8> {
+        let mut v = vec![0u8; 256];
+        v[0..4].copy_from_slice(b"LASF");
+        v[24] = 1; // major
+        v[25] = 4; // minor
+        v[94..96].copy_from_slice(&227u16.to_le_bytes()); // header size
+        v[104] = 6; // point data record format
+        v[105..107].copy_from_slice(&30u16.to_le_bytes()); // record length
+        v[107..111].copy_from_slice(&12345u32.to_le_bytes()); // point count
+        // scales at 131, offsets at 155, bounds at 179
+        v[131..139].copy_from_slice(&0.001f64.to_le_bytes());
+        v[179..187].copy_from_slice(&100.0f64.to_le_bytes()); // max x
+        v[191..199].copy_from_slice(&(-100.0f64).to_le_bytes()); // min x
+        v[227..235].copy_from_slice(&50.0f64.to_le_bytes()); // max z
+        v[235..243].copy_from_slice(&(-50.0f64).to_le_bytes()); // min z
+        v
+    }
+
+    #[tokio::test]
+    async fn las_header() -> Result<()> {
+        let out = adapt_to_string(LasAdapter, "survey.las", make_las()).await?;
+        assert!(out.contains("las_version: 1.4"), "got {out}");
+        assert!(out.contains("point_format: 6"));
+        assert!(out.contains("points: 12345"));
+        assert!(out.contains("min_x: -100"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn las_rejects_bad_magic() {
+        let mut data = make_las();
+        data[0..4].copy_from_slice(b"NOPE");
+        let (a, d) = simple_adapt_info(std::path::Path::new("x.las"), Box::pin(Cursor::new(data)));
+        let res = LasAdapter.adapt(a, &d).await;
+        assert!(res.err().expect("should fail").downcast_ref::<AdapterBail>().is_some());
     }
 }

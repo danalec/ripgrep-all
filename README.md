@@ -204,6 +204,14 @@ Adapters:
   Extracts the node tree and string properties from binary Autodesk FBX files (ASCII FBX is searched as plain text)  
    Extensions: .fbx
 
+- **pcd**
+  Extracts the field/point structure from binary PCD point-cloud files (ASCII PCD is searched as plain text)  
+   Extensions: .pcd
+
+- **las**
+  Extracts version, point format, counts and bounding box from LAS/LAZ lidar files (header only; point payloads are not decoded)  
+   Extensions: .las, .laz
+
 The following adapters are disabled by default, and can be enabled using '--rga-adapters=+foo,bar':
 
 - **mail**
