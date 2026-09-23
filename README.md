@@ -1,22 +1,15 @@
 # rga: ripgrep, but also search in PDFs, E-Books, Office documents, zip, tar.gz, etc.
 
-> **Community build.** This fork is maintained by [danalec](https://github.com/danalec).
-> The `main` branch builds on upstream master (the `master` branch mirrors upstream) with additional search
-> capability and performance work, and publishes its own Windows builds
-> (see [releases](https://github.com/danalec/ripgrep-all/releases)). Improvements
-> developed here are also submitted upstream as pull requests — see
-> [upstream PRs by @danalec](https://github.com/phiresky/ripgrep-all/pulls?q=is%3Apr+author%3Adanalec).
+> **Community build.** This fork is maintained by [danalec](https://github.com/danalec),
+> moves faster than upstream, and publishes its own Windows builds
+> (see [releases](https://github.com/danalec/ripgrep-all/releases)).
 > Upstream: [phiresky/ripgrep-all](https://github.com/phiresky/ripgrep-all).
 >
-> Additions on top of upstream so far: persistent cache daemon with password
-> support, tesseract OCR adapter (opt-in), rga-doctor and cache management
-> tools, unified ffmpeg streaming, configurable zip/ffmpeg extensions,
-> postproc page-break markers, legacy Word 97-2003 .doc search via antiword,
-> .rtf via pandoc, and a single-pass memchr-based line prefixer that is
-> about 35% faster on newline-dense text.
->
-> **→ The full list of what this fork adds is maintained in [README-FORK.md](README-FORK.md)**
-> (adapters, compression formats, search-output modes, robustness fixes, branch status).
+> **→ Everything this fork adds is maintained in [README-FORK.md](README-FORK.md)** —
+> adapters (3D, geodata, science, ML/LLM model files, media metadata, 7z, cpio),
+> compression formats (brotli, lz4, lzma, .Z), search-output modes (csv/xml,
+> boolean filters), robustness fixes, and branch status. Improvements developed
+> here are also submitted upstream as pull requests when they fit.
 
 rga is a line-oriented search tool that allows you to look for a regex in a multitude of file types. rga wraps the awesome [ripgrep] and enables it to search in pdf, docx, sqlite, jpg, movie subtitles (mkv, mp4), etc.
 
