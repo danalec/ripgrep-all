@@ -135,9 +135,9 @@ Order (by merge-probability × value):
 
 | Week | Focus |
 |------|-------|
-| 1 | Phase 0 harness + corpus |
-| 2 | Phase 1 quick wins (+ upstream PRs) |
-| 3 | Phase 2 PGO pipeline (linux x86_64 first) |
-| 3–4 | Phase 3 attestations (parallel) |
-| 4–5 | Phase 4 AUR + winget |
-| ongoing | Phase 5 upstream campaign as reviews land |
+| ~~1~~ done | Phase 0 harness + corpus (plus mimalloc discovery: +59-62% on archives) |
+| ~~2~~ done | Phase 1 quick wins — mimalloc default-on, fat LTO release profile |
+| ~~2~~ done (code) | Phase 2 PGO pipeline (linux+windows workflows); e2e numbers pending a test tag |
+| ~~2~~ done | Phase 3 attestations on all asset-producing workflows + verify docs |
+| ~~3~~ code done | Phase 4 AUR + winget workflows (self-skip without secrets); account setup pending |
+| ongoing | Phase 5 upstream campaign as reviews land (#360 pacman open) |
