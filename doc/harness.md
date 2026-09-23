@@ -16,6 +16,8 @@ the workspace", instead of a zoo of per-format scripts.
 | model config inside .gguf / .safetensors | no             | yes (`gguf`, `safetensors` adapters) |
 | dtype/shape of a .npy dataset       | no                  | yes (`npy` adapter) |
 | node names inside .onnx graphs      | no                  | yes (`protobuf` adapter) |
+| vocab pieces inside a SentencePiece `tokenizer.model` | no | yes (`protobuf` adapter) |
+| BPE tokens inside a `.tiktoken` rank file | no          | yes (`tiktoken` adapter) |
 | rows inside .sqlite                 | no                  | yes (`sqlite` adapter) |
 
 Because adapters are cacheable and streamed, repeated searches over big

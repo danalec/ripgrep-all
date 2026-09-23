@@ -154,9 +154,17 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// format a gguf metadata value; arrays are truncated with a count hint
-fn gguf_value(r: &mut Reader, type_id: u32, depth: u32) -> Result<String> {
+/// format a gguf metadata value; arrays are truncated with a count hint.
+/// v1 files use u32 for string/array lengths, v2+ use u64.
+fn gguf_value(r: &mut Reader, type_id: u32, v1: bool, depth: u32) -> Result<String> {
     const ARRAY_MAX: usize = 8;
+    let read_len = |r: &mut Reader| -> Result<usize> {
+        Ok(if v1 {
+            r.u32()? as usize
+        } else {
+            r.u64()? as usize
+        })
+    };
     match type_id {
         0 => Ok(format!("{}", r.u8()?)),
         1 => Ok(format!("{}", r.i8()?)),
@@ -167,7 +175,7 @@ fn gguf_value(r: &mut Reader, type_id: u32, depth: u32) -> Result<String> {
         6 => Ok(format!("{}", r.f32()?)),
         7 => Ok(if r.u8()? != 0 { "true" } else { "false" }.to_string()),
         8 => {
-            let len = r.u64()? as usize;
+            let len = read_len(r)?;
             if len > 1 << 24 {
                 bail!("gguf string too long ({len})");
             }
@@ -181,21 +189,21 @@ fn gguf_value(r: &mut Reader, type_id: u32, depth: u32) -> Result<String> {
             if elem_type == 9 {
                 bail!("array of arrays is not a valid gguf type");
             }
-            let len = r.u64()? as usize;
+            let len = read_len(r)?;
             if len <= ARRAY_MAX {
                 let mut items = Vec::with_capacity(len);
                 for _ in 0..len {
-                    items.push(gguf_value(r, elem_type, depth + 1)?);
+                    items.push(gguf_value(r, elem_type, v1, depth + 1)?);
                 }
                 Ok(format!("[{}]", items.join(", ")))
             } else {
                 let mut items = Vec::with_capacity(ARRAY_MAX);
                 for _ in 0..ARRAY_MAX {
-                    items.push(gguf_value(r, elem_type, depth + 1)?);
+                    items.push(gguf_value(r, elem_type, v1, depth + 1)?);
                 }
                 // consume the rest without formatting
                 for _ in ARRAY_MAX..len {
-                    gguf_value(r, elem_type, depth + 1)?;
+                    gguf_value(r, elem_type, v1, depth + 1)?;
                 }
                 Ok(format!("[{}, ... ({} items)]", items.join(", "), len))
             }
@@ -232,7 +240,7 @@ fn parse_gguf(data: &[u8]) -> Result<String> {
     for _ in 0..kv_count {
         let key = read_str(&mut r, version)?;
         let type_id = r.u32()?;
-        let value = gguf_value(&mut r, type_id, 0)
+        let value = gguf_value(&mut r, type_id, version == 1, 0)
             .with_context(|| format!("reading gguf metadata key {key:?}"))?;
         out.push_str(&format!("{key}: {value}\n"));
         if out.len() > 10_000_000 {
@@ -436,6 +444,8 @@ lazy_static! {
         fast_matchers: vec![
             FastFileMatcher::FileExtension("onnx".to_string()),
             FastFileMatcher::FileExtension("pb".to_string()),
+            // SentencePiece models (tokenizer.model, spiece.model) are protobufs
+            FastFileMatcher::FileExtension("model".to_string()),
         ],
         slow_matchers: None,
         keep_fast_matchers_if_accurate: true,
@@ -572,6 +582,102 @@ impl FileAdapter for ProtobufAdapter {
     }
 }
 
+// ---------------------------------------------------------------------------
+// tiktoken BPE rank files (cl100k_base.tiktoken etc.)
+// ---------------------------------------------------------------------------
+
+lazy_static! {
+    static ref TIKTOKEN_META: AdapterMeta = meta(
+        "tiktoken",
+        "Decodes .tiktoken BPE rank files (base64 token + rank per line) into greppable 'token <rank>: <text>' lines",
+        &["tiktoken"]
+    );
+}
+
+#[derive(Default)]
+pub struct TiktokenAdapter;
+impl TiktokenAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl GetMetadata for TiktokenAdapter {
+    fn metadata(&self) -> &AdapterMeta {
+        &TIKTOKEN_META
+    }
+}
+
+const TIKTOKEN_MAX_LINES: usize = 500_000;
+
+/// minimal standard-alphabet base64 decoder (padding optional, whitespace ignored)
+fn b64_decode(input: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Some((c - b'0' + 52) as u32),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let bytes: Vec<u8> = input
+        .bytes()
+        .filter(|b| !matches!(b, b'=' | b'\r' | b'\n' | b' ' | b'\t'))
+        .collect();
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    let mut acc: u32 = 0;
+    let mut nbits = 0u32;
+    for &b in &bytes {
+        acc = (acc << 6) | val(b)?;
+        nbits += 6;
+        if nbits >= 8 {
+            nbits -= 8;
+            out.push((acc >> nbits) as u8);
+        }
+    }
+    Some(out)
+}
+
+fn parse_tiktoken(data: &[u8]) -> Result<String> {
+    let text = String::from_utf8_lossy(data);
+    let mut out = String::new();
+    let mut lines = 0usize;
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(tok), Some(rank)) = (parts.next(), parts.next()) else {
+            continue; // blank lines, comments or malformed rows
+        };
+        let Ok(rank) = rank.parse::<u64>() else {
+            continue;
+        };
+        let decoded = b64_decode(tok).unwrap_or_default();
+        let s = String::from_utf8_lossy(&decoded);
+        out.push_str(&format!("token {rank}: {s}\n"));
+        lines += 1;
+        if lines >= TIKTOKEN_MAX_LINES {
+            out.push_str("... (truncated)\n");
+            break;
+        }
+    }
+    if out.is_empty() {
+        bail!("no token lines found");
+    }
+    Ok(out)
+}
+
+#[async_trait]
+impl FileAdapter for TiktokenAdapter {
+    async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
+        let (data, filepath_hint, prefix, depth, postprocess, config) = read_input!(ai);
+        let text = parse_tiktoken(&data).map_err(|e| adapter_bail(format!("tiktoken: {e}")))?;
+        text_result(filepath_hint, prefix, depth, postprocess, config, text)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,6 +740,54 @@ mod tests {
         assert_eq!(
             out,
             "gguf_version: 2\ntensors: 1\ngeneral.architecture: \"llama\"\nllama.context_length: 4096\nllama.rope.dimension_count: [1, 2, 3]"
+        );
+        Ok(())
+    }
+
+    fn make_gguf_v1(kvs: &[(String, u32, Vec<u8>)]) -> Vec<u8> {
+        // v1: u32 tensor/kv counts, u32 key lengths
+        let mut v = Vec::new();
+        v.extend_from_slice(b"GGUF");
+        v.extend_from_slice(&1u32.to_le_bytes());
+        v.extend_from_slice(&1u32.to_le_bytes()); // tensor_count
+        v.extend_from_slice(&(kvs.len() as u32).to_le_bytes());
+        for (k, type_id, val) in kvs {
+            v.extend_from_slice(&(k.len() as u32).to_le_bytes());
+            v.extend_from_slice(k.as_bytes());
+            v.extend_from_slice(&type_id.to_le_bytes());
+            v.extend_from_slice(val);
+        }
+        v
+    }
+
+    fn str_val_v1(s: &str) -> Vec<u8> {
+        let mut v = (s.len() as u32).to_le_bytes().to_vec();
+        v.extend_from_slice(s.as_bytes());
+        v
+    }
+
+    #[tokio::test]
+    async fn gguf_v1_uses_u32_lengths() -> Result<()> {
+        // v1 string/array lengths are u32 (early llama.cpp-era files)
+        let mut rope = Vec::new();
+        rope.extend_from_slice(&4u32.to_le_bytes()); // elem type u32
+        rope.extend_from_slice(&3u32.to_le_bytes()); // v1: u32 array len
+        for x in [1u32, 2, 3] {
+            rope.extend_from_slice(&x.to_le_bytes());
+        }
+        let data = make_gguf_v1(&[
+            ("general.architecture".into(), 8, str_val_v1("llama")),
+            (
+                "llama.context_length".into(),
+                4,
+                4096u32.to_le_bytes().to_vec(),
+            ),
+            ("llama.rope.dimension_count".into(), 9, rope),
+        ]);
+        let out = adapt_to_string(GgufAdapter, "old.gguf", data).await?;
+        assert_eq!(
+            out,
+            "gguf_version: 1\ntensors: 1\ngeneral.architecture: \"llama\"\nllama.context_length: 4096\nllama.rope.dimension_count: [1, 2, 3]"
         );
         Ok(())
     }
@@ -751,6 +905,43 @@ mod tests {
         let data = vec![0xffu8; 100];
         let (a, d) = simple_adapt_info(std::path::Path::new("x.pb"), Box::pin(Cursor::new(data)));
         let res = ProtobufAdapter.adapt(a, &d).await;
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // tiktoken
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn b64_decodes_standard_and_paddingless() {
+        assert_eq!(b64_decode("aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(b64_decode("aGVsbG8").unwrap(), b"hello");
+        assert_eq!(b64_decode("IQ").unwrap(), b"!");
+        assert!(b64_decode("!!not-b64!!").is_none());
+    }
+
+    #[tokio::test]
+    async fn tiktoken_ranks_decoded() -> Result<()> {
+        // cl100k-style: base64 token, tab, rank
+        let data = b"aGVsbG8=\t0\nd29ybGQ=\t1\n# comment line\n\n".to_vec();
+        let out = adapt_to_string(TiktokenAdapter, "cl100k_base.tiktoken", data).await?;
+        assert_eq!(out, "token 0: hello\ntoken 1: world");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tiktoken_rejects_garbage() {
+        let data = b"no ranks here, just prose\n".to_vec();
+        let (a, d) = simple_adapt_info(
+            std::path::Path::new("x.tiktoken"),
+            Box::pin(Cursor::new(data)),
+        );
+        let res = TiktokenAdapter.adapt(a, &d).await;
         assert!(
             res.err()
                 .expect("should bail")
