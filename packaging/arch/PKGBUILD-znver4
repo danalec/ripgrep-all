@@ -32,27 +32,36 @@ build() {
   export LIBSQLITE3_SYS_USE_PKG_CONFIG=1
   export ZSTD_SYS_USE_PKG_CONFIG=1
   # Zen 4+ (znver4) tuned build: AVX-512 capable codegen, fat LTO, single CGU.
-  export RUSTFLAGS="-C target-cpu=znver4"
+  # Per-target rustflags + explicit --target so host build scripts (proc-macro
+  # probes etc.) stay generic: with a global RUSTFLAGS they also get znver4
+  # and die with SIGILL on build machines without an AVX-512 CPU.
+  # makepkg exports RUSTFLAGS (via /etc/makepkg.conf.d/rust.conf) and cargo
+  # honors RUSTFLAGS over per-target rustflags, so clear it here; the
+  # frame-pointer default it carries is irrelevant for a stripped release pkg.
+  unset RUSTFLAGS
+  export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C target-cpu=znver4"
   export CARGO_PROFILE_RELEASE_DEBUG=false
   export CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=off
   export CARGO_PROFILE_RELEASE_LTO=fat
   export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
-  cargo build --frozen --release --all-features
+  cargo build --frozen --release --all-features --target x86_64-unknown-linux-gnu
 }
 
 check() {
   cd ripgrep-all-${pkgver}
   export LIBSQLITE3_SYS_USE_PKG_CONFIG=1
   export ZSTD_SYS_USE_PKG_CONFIG=1
-  export RUSTFLAGS="-C target-cpu=znver4"
+  # generic codegen: the check only validates the code and must run on any
+  # build machine, AVX-512 or not
   cargo test --frozen --all-features
 }
 
 package() {
   cd ripgrep-all-${pkgver}
-  install -Dm 755 target/release/rga "${pkgdir}"/usr/bin/rga
-  install -Dm 755 target/release/rga-preproc "${pkgdir}"/usr/bin/rga-preproc
-  install -Dm 755 target/release/rga-fzf "${pkgdir}"/usr/bin/rga-fzf
-  install -Dm 755 target/release/rga-fzf-open "${pkgdir}"/usr/bin/rga-fzf-open
+  local t="target/x86_64-unknown-linux-gnu/release"
+  install -Dm 755 "$t/rga" "${pkgdir}"/usr/bin/rga
+  install -Dm 755 "$t/rga-preproc" "${pkgdir}"/usr/bin/rga-preproc
+  install -Dm 755 "$t/rga-fzf" "${pkgdir}"/usr/bin/rga-fzf
+  install -Dm 755 "$t/rga-fzf-open" "${pkgdir}"/usr/bin/rga-fzf-open
   install -Dm 644 LICENSE.md "${pkgdir}"/usr/share/licenses/${pkgname}/LICENSE.md
 }
