@@ -187,6 +187,7 @@ pub fn get_all_adapters(custom_adapters: Option<Vec<CustomAdapterConfig>>) -> Ad
         Arc::new(threed::FbxAdapter::new()),
         Arc::new(threed::PcdAdapter::new()),
         Arc::new(threed::LasAdapter::new()),
+        Arc::new(threed::VtkAdapter::new()),
     ];
     adapters.extend(
         BUILTIN_SPAWNING_ADAPTERS

@@ -547,6 +547,85 @@ impl FileAdapter for FbxAdapter {
 }
 
 // ---------------------------------------------------------------------------
+// VTK legacy format (binary)
+// ---------------------------------------------------------------------------
+
+lazy_static! {
+    static ref VTK_META: AdapterMeta = meta(
+        "vtk",
+        "Extracts title, dataset type and dimensions from binary legacy VTK files (ASCII VTK is searched as plain text)",
+        &["vtk"]
+    );
+    /// keywords after which the binary payload begins (header ends here)
+    static ref VTK_PAYLOAD_KEYWORDS: std::collections::HashSet<&'static str> = [
+        "POINTS", "CELLS", "POLYGONS", "VERTICES", "LINES", "TRIANGLE_STRIPS",
+        "FIELD", "SCALARS", "VECTORS", "NORMALS", "TEXTURE_COORDINATES",
+        "TENSORS", "LOOKUP_TABLE", "COLOR_SCALARS",
+    ]
+    .into_iter()
+    .collect();
+}
+
+#[derive(Default)]
+pub struct VtkAdapter;
+impl VtkAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl GetMetadata for VtkAdapter {
+    fn metadata(&self) -> &AdapterMeta {
+        &VTK_META
+    }
+}
+
+#[async_trait]
+impl FileAdapter for VtkAdapter {
+    async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
+        let (data, path, prefix, depth, postprocess, config) = read_input!(ai);
+        let text = (|| {
+            if !data.starts_with(b"# vtk DataFile Version") {
+                bail!("not a legacy vtk file");
+            }
+            let header_bytes = &data[..data.len().min(1 << 20)];
+            let header = String::from_utf8_lossy(header_bytes);
+            let mut out = String::new();
+            let mut dataset: Option<String> = None;
+            let mut is_binary = false;
+            for (i, line) in header.lines().enumerate() {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                let keyword = tokens.first().copied().unwrap_or("");
+                if VTK_PAYLOAD_KEYWORDS.contains(keyword) {
+                    break; // the rest is payload
+                }
+                match (i, keyword) {
+                    (0, _) => out.push_str(&format!("vtk_version: {}\n", line.trim_start_matches("# vtk DataFile Version").trim())),
+                    (1, _) => out.push_str(&format!("title: {}\n", line.trim())),
+                    (_, "BINARY") => is_binary = true,
+                    (_, "ASCII") => bail!("ascii vtk is plain text"),
+                    (_, "DATASET") if tokens.len() >= 2 => {
+                        dataset = Some(tokens[1].to_string());
+                    }
+                    (_, "DIMENSIONS" | "ORIGIN" | "SPACING" | "ASPECT_RATIO" | "EXTENT") => {
+                        out.push_str(&format!("{}: {}\n", keyword.to_lowercase(), tokens[1..].join(" ")));
+                    }
+                    _ => {}
+                }
+            }
+            if !is_binary {
+                bail!("unrecognized vtk header (neither ASCII nor BINARY declared)");
+            }
+            out.push_str(&format!(
+                "dataset: {}\n",
+                dataset.unwrap_or_else(|| "UNKNOWN".into())
+            ));
+            Ok(out)
+        })();
+        finish(path, prefix, depth, postprocess, config, text)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PCD (Point Cloud Data, ROS/robotics)
 // ---------------------------------------------------------------------------
 
@@ -903,5 +982,30 @@ mod tests {
         let (a, d) = simple_adapt_info(std::path::Path::new("x.las"), Box::pin(Cursor::new(data)));
         let res = LasAdapter.adapt(a, &d).await;
         assert!(res.err().expect("should fail").downcast_ref::<AdapterBail>().is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // VTK
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn vtk_binary_header() -> Result<()> {
+        let header = b"# vtk DataFile Version 3.0\nsimulation grid\nelevator shaft\nBINARY\nDATASET STRUCTURED_GRID\nDIMENSIONS 10 20 30\nPOINTS 6000 float\n";
+        let mut data = header.to_vec();
+        data.resize(header.len() + 6000 * 4, 0);
+        let out = adapt_to_string(VtkAdapter, "grid.vtk", data).await?;
+        assert!(out.contains("vtk_version: 3.0"), "got {out}");
+        assert!(out.contains("title: simulation grid"), "got {out}");
+        assert!(out.contains("dataset: STRUCTURED_GRID"), "got {out}");
+        assert!(out.contains("dimensions: 10 20 30"), "got {out}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn vtk_ascii_bails() {
+        let data = b"# vtk DataFile Version 3.0\nt\nASCII\nDATASET POLYDATA\n".to_vec();
+        let (a, d) = simple_adapt_info(std::path::Path::new("a.vtk"), Box::pin(Cursor::new(data)));
+        let res = VtkAdapter.adapt(a, &d).await;
+        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
     }
 }

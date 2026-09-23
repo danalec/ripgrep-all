@@ -212,6 +212,10 @@ Adapters:
   Extracts version, point format, counts and bounding box from LAS/LAZ lidar files (header only; point payloads are not decoded)  
    Extensions: .las, .laz
 
+- **vtk**
+  Extracts title, dataset type and dimensions from binary legacy VTK files (ASCII VTK is searched as plain text)  
+   Extensions: .vtk
+
 The following adapters are disabled by default, and can be enabled using '--rga-adapters=+foo,bar':
 
 - **mail**
