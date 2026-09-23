@@ -118,8 +118,7 @@ impl FileAdapter for FitsAdapter {
         } = ai;
         let mut data = Vec::new();
         inp.read_to_end(&mut data).await?;
-        let text = parse_fits(&data)
-            .map_err(|e| adapter_bail(format!("fits: {e}")))?;
+        let text = parse_fits(&data).map_err(|e| adapter_bail(format!("fits: {e}")))?;
         let mut out_path: PathBuf = filepath_hint;
         out_path.set_extension("txt");
         Ok(one_file(AdaptInfo {
@@ -162,7 +161,9 @@ mod tests {
             Box::pin(Cursor::new(data)),
         );
         let out = FitsAdapter.adapt(a, &d).await?;
-        Ok(String::from_utf8(adapted_to_vec(out).await?)?.trim().to_string())
+        Ok(String::from_utf8(adapted_to_vec(out).await?)?
+            .trim()
+            .to_string())
     }
 
     #[tokio::test]
@@ -188,18 +189,23 @@ mod tests {
         comment.resize(80, b' ');
         let data = make_fits(&[card("SIMPLE", "T"), comment]);
         let out = adapt_to_string(data).await?;
-        assert!(out.contains("COMMENT: reduced with flat field"), "got {out}");
+        assert!(
+            out.contains("COMMENT: reduced with flat field"),
+            "got {out}"
+        );
         Ok(())
     }
 
     #[tokio::test]
     async fn fits_rejects_non_fits() {
         let data = vec![0u8; 3000];
-        let (a, d) = simple_adapt_info(
-            std::path::Path::new("x.fits"),
-            Box::pin(Cursor::new(data)),
-        );
+        let (a, d) = simple_adapt_info(std::path::Path::new("x.fits"), Box::pin(Cursor::new(data)));
         let res = FitsAdapter.adapt(a, &d).await;
-        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
     }
 }
