@@ -1,0 +1,82 @@
+# Publishes the AUR -bin package (packaging/aur/PKGBUILD.template) on every
+# release: downloads the released asset, hashes it, renders the template,
+# regenerates .SRCINFO, and pushes to the AUR git remote.
+#
+# One-time setup (secrets on the GitHub repo):
+#   AUR_SSH_PRIVATE_KEY  private half of the SSH key registered on your AUR
+#                        account (my.account -> SSH Public Key)
+#   AUR_REPO_SSH         e.g. ssh://aur@aur.archlinux.org/ripgrep-all-community-bin.git
+# First run also requires creating the package base on the AUR (submit the
+# rendered PKGBUILD once via the web UI or aurpublish init).
+name: aur
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  aur:
+    name: publish AUR package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check credentials
+        id: creds
+        env:
+          KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT";
+          else echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "AUR secrets not configured, skipping"; fi
+
+      - name: Install tools
+        if: steps.creds.outputs.enabled == 'true'
+        run: sudo apt-get update && sudo apt-get install -y pacman-contrib
+
+      - name: Download release asset and hash it
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ github.event.release.tag_name }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            -p "ripgrep_all-${{ github.event.release.tag_name }}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "ASSET_SHA=$(sha256sum ripgrep_all-*.tar.gz | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Render PKGBUILD and .SRCINFO
+        if: steps.creds.outputs.enabled == 'true'
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          sed -e "s/@VERSION@/$VERSION/" \
+              -e "s/@SHA256@/$ASSET_SHA/" \
+              packaging/aur/PKGBUILD.template > PKGBUILD
+          makepkg --printsrcinfo > .SRCINFO
+
+      - name: Push to AUR
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_REPO_SSH: ${{ secrets.AUR_REPO_SSH }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur_key
+          chmod 600 ~/.ssh/aur_key
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes"
+          REPO_DIR=$(basename "$AUR_REPO_SSH" .git)
+          git clone "$AUR_REPO_SSH" "$REPO_DIR" 2>/dev/null \
+            || { mkdir "$REPO_DIR"; git -C "$REPO_DIR" init; git -C "$REPO_DIR" remote add origin "$AUR_REPO_SSH"; }
+          cp PKGBUILD .SRCINFO "$REPO_DIR"/
+          git -C "$REPO_DIR" config user.name "github-actions[bot]"
+          git -C "$REPO_DIR" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$REPO_DIR" add PKGBUILD .SRCINFO
+          if git -C "$REPO_DIR" diff --cached --quiet; then
+            echo "no changes (same version already published)"
+          else
+            git -C "$REPO_DIR" commit -m "release ${{ github.event.release.tag_name }}"
+            git -C "$REPO_DIR" push origin HEAD:master
+          fi

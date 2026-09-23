@@ -1,0 +1,64 @@
+# Submits winget manifests to microsoft/winget-pkgs on every release using
+# komac (https://github.com/russellbanks/komac), the community-standard
+# winget manifest updater.
+#
+# One-time setup:
+#   1. Fork https://github.com/microsoft/winget-pkgs to your GitHub account.
+#   2. Create a PAT with public_repo scope.
+#   3. Repo secrets:
+#        WINGET_TOKEN      the PAT
+#        WINGET_FORK_OWNER your GitHub username (fork owner)
+# Without the secrets the job skips itself (check step below).
+name: winget
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  winget:
+    name: submit winget manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check credentials
+        id: creds
+        env:
+          KEY: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if [ -n "$KEY" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT";
+          else echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "WINGET_TOKEN not configured, skipping"; fi
+
+      - name: Install komac
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download --repo russellbanks/komac --pattern '*linux*' \
+            -O komac.tar.gz --clobber 2>/dev/null \
+          || gh release download --repo russellbanks/komac -O komac.bin --clobber
+          if [ -f komac.tar.gz ]; then tar xzf komac.tar.gz; fi
+          BIN=$(find . -maxdepth 2 -name 'komac*' -type f | head -1)
+          chmod +x "$BIN"
+          echo "KOMAC=$(realpath "$BIN")" >> "$GITHUB_ENV"
+
+      - name: Submit manifest
+        if: steps.creds.outputs.enabled == 'true'
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          WINGET_FORK_OWNER: ${{ secrets.WINGET_FORK_OWNER }}
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          ASSET="ripgrep_all-${{ github.event.release.tag_name }}-x86_64-pc-windows-msvc.zip"
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/${{ github.event.release.tag_name }}/$ASSET"
+          "$KOMAC" update --id danalec.ripgrep-all \
+            --version "$VERSION" \
+            --urls "$URL" \
+            --token "$WINGET_TOKEN" \
+            --fork-owner "$WINGET_FORK_OWNER" \
+            --submit || echo "komac submission failed (non-fatal: winget PRs can also be made manually)"

@@ -1,0 +1,36 @@
+# Maintainer template for the AUR -bin package. The aur.yml workflow renders
+# this into a concrete PKGBUILD on every release (replacing @VERSION@ and
+# @SHA256@) and pushes it to the AUR git remote.
+pkgname=ripgrep-all-community-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="rga: ripgrep, but also search in PDFs, E-Books, Office documents, zip, tar.gz, etc. (community build, prebuilt)"
+arch=('x86_64')
+url='https://github.com/danalec/ripgrep-all'
+license=('AGPL-3.0-or-later')
+depends=('bzip2' 'glibc' 'libgcc' 'ripgrep' 'sqlite' 'xz' 'zstd')
+optdepends=(
+  'antiword: for the legacy .doc adapter'
+  'ffmpeg: for the ffmpeg adapter'
+  'pandoc: for the pandoc adapter'
+  'poppler: for the poppler adapter'
+  'tesseract: for the OCR image adapter (opt-in)'
+)
+provides=('ripgrep-all')
+conflicts=('ripgrep-all' 'ripgrep-all-bin' 'ripgrep-all-znver4')
+options=('!debug')
+# the generic x86_64 asset; Zen 4 users can install ripgrep-all-znver4 from
+# the same release page or the pacman package
+source=(
+  "ripgrep_all-v${pkgver}-x86_64-unknown-linux-gnu.tar.gz::https://github.com/danalec/ripgrep-all/releases/download/v${pkgver}/ripgrep_all-v${pkgver}-x86_64-unknown-linux-gnu.tar.gz"
+)
+sha256sums=('@SHA256@')
+
+package() {
+  cd "ripgrep_all-v${pkgver}-x86_64-unknown-linux-gnu"
+  install -Dm 755 rga "${pkgdir}"/usr/bin/rga
+  install -Dm 755 rga-preproc "${pkgdir}"/usr/bin/rga-preproc
+  install -Dm 755 rga-fzf "${pkgdir}"/usr/bin/rga-fzf
+  install -Dm 755 rga-fzf-open "${pkgdir}"/usr/bin/rga-fzf-open
+  install -Dm 644 LICENSE.md "${pkgdir}"/usr/share/licenses/${pkgname}/LICENSE.md
+}
