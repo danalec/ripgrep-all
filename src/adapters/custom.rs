@@ -183,6 +183,21 @@ lazy_static! {
             match_only_by_mime: None,
             output_path_hint: None,
             bail_if_empty_output: None
+        },
+        CustomAdapterConfig {
+            name: "xls2csv".to_owned(),
+            version: 1,
+            description: "Uses xls2csv (from catdoc) to convert legacy binary Excel (.xls) spreadsheets to CSV".to_owned(),
+            extensions: strs(&["xls"]),
+            mimetypes: None,
+            binary: "xls2csv".to_string(),
+            // xls2csv needs a seekable file path, so archives-in-stream are
+            // not supported; it is opt-in for that reason
+            args: strs(&["$input_virtual_path"]),
+            disabled_by_default: Some(true),
+            match_only_by_mime: None,
+            output_path_hint: None,
+            bail_if_empty_output: None
         }
     ];
 }
