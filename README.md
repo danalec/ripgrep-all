@@ -171,7 +171,7 @@ Adapters:
 
 - **zip**
   Reads a zip file as a stream and recurses down into its contents  
-   Extensions: .zip, .jar  
+   Extensions: .zip, .jar, .3mf, .usdz  
    Mime Types: application/zip
 
 - **decompress**
@@ -187,6 +187,22 @@ Adapters:
   Uses sqlite bindings to convert sqlite databases into a simple plain text format  
    Extensions: .db, .db3, .sqlite, .sqlite3  
    Mime Types: application/x-sqlite3
+
+- **glb**
+  Extracts the JSON scene description (nodes, meshes, materials, animations) from binary glTF (.glb) files  
+   Extensions: .glb
+
+- **stl**
+  Extracts header and triangle count from binary STL files (ASCII STL is searched as plain text)  
+   Extensions: .stl
+
+- **ply**
+  Extracts element/property structure from binary PLY files (ASCII PLY is searched as plain text)  
+   Extensions: .ply
+
+- **fbx**
+  Extracts the node tree and string properties from binary Autodesk FBX files (ASCII FBX is searched as plain text)  
+   Extensions: .fbx
 
 The following adapters are disabled by default, and can be enabled using '--rga-adapters=+foo,bar':
 

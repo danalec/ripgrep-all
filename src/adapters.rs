@@ -7,6 +7,7 @@ pub mod postproc;
 use std::sync::Arc;
 pub mod sqlite;
 pub mod tar;
+pub mod threed;
 pub mod writing;
 pub mod zip;
 use crate::{adapted_iter::AdaptedFilesIterBox, config::RgaConfig, matching::*};
@@ -180,6 +181,10 @@ pub fn get_all_adapters(custom_adapters: Option<Vec<CustomAdapterConfig>>) -> Ad
         Arc::new(antiword::AntiwordAdapter::new()),
         Arc::new(tar::TarAdapter::new()),
         Arc::new(sqlite::SqliteAdapter::new()),
+        Arc::new(threed::GlbAdapter::new()),
+        Arc::new(threed::StlAdapter::new()),
+        Arc::new(threed::PlyAdapter::new()),
+        Arc::new(threed::FbxAdapter::new()),
     ];
     adapters.extend(
         BUILTIN_SPAWNING_ADAPTERS
