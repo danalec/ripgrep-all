@@ -11,7 +11,6 @@
 
 use super::*;
 use crate::adapted_iter::one_file;
-use crate::config::RgaConfig;
 
 use anyhow::{Result, bail};
 use lazy_static::lazy_static;

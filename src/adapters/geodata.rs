@@ -14,7 +14,7 @@ use super::*;
 use crate::adapted_iter::one_file;
 use crate::config::RgaConfig;
 
-use anyhow::{Result, bail, format_err};
+use anyhow::{Result, bail};
 use lazy_static::lazy_static;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -271,7 +271,7 @@ fn parse_tiff(data: &[u8]) -> Result<String> {
     } else {
         u16::from_le_bytes(data[2..4].try_into().unwrap())
     };
-    let (big, value_area) = match magic {
+    let (big, _value_area) = match magic {
         42 => (false, 4usize),
         43 => (true, 8),
         _ => bail!("not a TIFF file (bad magic {magic})"),
