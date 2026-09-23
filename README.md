@@ -171,7 +171,7 @@ Adapters:
 
 - **zip**
   Reads a zip file as a stream and recurses down into its contents  
-   Extensions: .zip, .jar  
+   Extensions: .zip, .jar, .3mf, .usdz  
    Mime Types: application/zip
 
 - **decompress**
@@ -204,6 +204,33 @@ Adapters:
 - **tiff**
   Extracts ASCII tags (description, make, model, software, datetime) and GeoTIFF geokeys from TIFF image files  
    Extensions: .tif, .tiff
+- **glb**
+  Extracts the JSON scene description (nodes, meshes, materials, animations) from binary glTF (.glb) files  
+   Extensions: .glb
+
+- **stl**
+  Extracts header and triangle count from binary STL files (ASCII STL is searched as plain text)  
+   Extensions: .stl
+
+- **ply**
+  Extracts element/property structure from binary PLY files (ASCII PLY is searched as plain text)  
+   Extensions: .ply
+
+- **fbx**
+  Extracts the node tree and string properties from binary Autodesk FBX files (ASCII FBX is searched as plain text)  
+   Extensions: .fbx
+
+- **pcd**
+  Extracts the field/point structure from binary PCD point-cloud files (ASCII PCD is searched as plain text)  
+   Extensions: .pcd
+
+- **las**
+  Extracts version, point format, counts and bounding box from LAS/LAZ lidar files (header only; point payloads are not decoded)  
+   Extensions: .las, .laz
+
+- **vtk**
+  Extracts title, dataset type and dimensions from binary legacy VTK files (ASCII VTK is searched as plain text)  
+   Extensions: .vtk
 
 The following adapters are disabled by default, and can be enabled using '--rga-adapters=+foo,bar':
 

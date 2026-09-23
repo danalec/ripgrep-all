@@ -63,7 +63,7 @@ impl Drop for StreamingEntryReader {
 
 // TODO: allow users to configure file extensions instead of hard coding the list
 // https://github.com/phiresky/ripgrep-all/pull/208#issuecomment-2173241243
-static EXTENSIONS: &[&str] = &["zip", "jar", "xpi", "kra", "snagx"];
+static EXTENSIONS: &[&str] = &["zip", "jar", "xpi", "kra", "snagx", "3mf", "usdz"];
 
 lazy_static! {
     static ref METADATA: AdapterMeta = AdapterMeta {

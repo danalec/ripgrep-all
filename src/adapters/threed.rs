@@ -1,0 +1,1103 @@
+//! Adapters for 3D modeling / geometry exchange formats.
+//!
+//! Covers the binary formats that `rg` cannot search directly:
+//! - GLB (binary glTF): extracts the embedded JSON scene description
+//! - STL: binary stereolithography files (ASCII STL is plain text and passes through)
+//! - PLY: binary polygon file format (ASCII PLY passes through)
+//! - FBX: binary Autodesk FBX node/property outline (ASCII FBX passes through)
+//!
+//! Text-based siblings (obj, mtl, off, usda, ascii stl/ply/fbx) need no
+//! adapter — `rg` searches them natively.
+
+use super::*;
+use crate::adapted_iter::one_file;
+use crate::config::RgaConfig;
+
+use anyhow::{Result, bail, format_err};
+use lazy_static::lazy_static;
+use std::io::Cursor;
+use std::path::PathBuf;
+use tokio::io::AsyncReadExt;
+
+fn meta(name: &str, description: &str, extensions: &[&str]) -> AdapterMeta {
+    AdapterMeta {
+        name: name.to_owned(),
+        version: 1,
+        description: description.to_owned(),
+        recurses: true,
+        fast_matchers: extensions
+            .iter()
+            .map(|s| FastFileMatcher::FileExtension(s.to_string()))
+            .collect(),
+        slow_matchers: None,
+        keep_fast_matchers_if_accurate: true,
+        disabled_by_default: false,
+    }
+}
+
+fn text_result(
+    filepath_hint: PathBuf,
+    line_prefix: String,
+    archive_recursion_depth: i32,
+    postprocess: bool,
+    config: RgaConfig,
+    text: String,
+) -> Result<AdaptedFilesIterBox> {
+    let mut out_path = filepath_hint;
+    out_path.set_extension("txt");
+    Ok(one_file(AdaptInfo {
+        filepath_hint: out_path,
+        is_real_file: false,
+        file_mtime_unix_ms: None,
+        archive_recursion_depth: archive_recursion_depth + 1,
+        inp: Box::pin(Cursor::new(text.into_bytes())),
+        line_prefix,
+        postprocess,
+        config,
+    }))
+}
+
+macro_rules! read_input {
+    ($ai:ident) => {{
+        let AdaptInfo {
+            filepath_hint,
+            line_prefix,
+            archive_recursion_depth,
+            postprocess,
+            config,
+            mut inp,
+            ..
+        } = $ai;
+        let mut data = Vec::new();
+        inp.read_to_end(&mut data).await?;
+        (
+            data,
+            filepath_hint,
+            line_prefix,
+            archive_recursion_depth,
+            postprocess,
+            config,
+        )
+    }};
+}
+
+fn finish(
+    filepath_hint: PathBuf,
+    line_prefix: String,
+    archive_recursion_depth: i32,
+    postprocess: bool,
+    config: RgaConfig,
+    text: Result<String>,
+) -> Result<AdaptedFilesIterBox> {
+    let text = text.map_err(|e| adapter_bail(format!("{e}")))?;
+    text_result(
+        filepath_hint,
+        line_prefix,
+        archive_recursion_depth,
+        postprocess,
+        config,
+        text,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// GLB (binary glTF)
+// ---------------------------------------------------------------------------
+
+lazy_static! {
+    static ref GLB_META: AdapterMeta = meta(
+        "glb",
+        "Extracts the JSON scene description (nodes, meshes, materials, animations) from binary glTF (.glb) files",
+        &["glb"]
+    );
+}
+
+#[derive(Default)]
+pub struct GlbAdapter;
+impl GlbAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl GetMetadata for GlbAdapter {
+    fn metadata(&self) -> &AdapterMeta {
+        &GLB_META
+    }
+}
+
+fn parse_glb(data: &[u8]) -> Result<String> {
+    if data.len() < 12 || &data[0..4] != b"glTF" {
+        bail!("not a GLB file (bad magic)");
+    }
+    let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
+    let total_len = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
+    if version != 2 {
+        bail!("unsupported GLB version {version}");
+    }
+    let mut out = format!("glb_version: {version}\n");
+    let mut pos = 12usize;
+    let mut json_seen = false;
+    while pos + 8 <= data.len() {
+        let chunk_len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+        let chunk_type = &data[pos + 4..pos + 8];
+        let start = pos + 8;
+        // checked arithmetic: a corrupt chunk_len must not wrap around
+        let end = match start.checked_add(chunk_len) {
+            Some(end) if end <= data.len() => end,
+            _ => bail!("GLB chunk overruns file"),
+        };
+        if end > total_len && total_len <= data.len() {
+            bail!("GLB chunk overruns declared file length");
+        }
+        match chunk_type {
+            b"JSON" => {
+                json_seen = true;
+                // pretty-print when possible so grep shows one match per line
+                match serde_json::from_slice::<serde_json::Value>(&data[start..end]) {
+                    Ok(v) => {
+                        out.push_str(&serde_json::to_string_pretty(&v)?);
+                        out.push('\n');
+                    }
+                    Err(_) => {
+                        out.push_str(&String::from_utf8_lossy(&data[start..end]));
+                        out.push('\n');
+                    }
+                }
+            }
+            b"BIN\0" => {
+                out.push_str(&format!("bin_chunk_bytes: {chunk_len}\n"));
+            }
+            other => {
+                out.push_str(&format!(
+                    "chunk: {} ({} bytes)\n",
+                    String::from_utf8_lossy(other),
+                    chunk_len
+                ));
+            }
+        }
+        pos = end;
+    }
+    if !json_seen {
+        bail!("GLB has no JSON chunk");
+    }
+    Ok(out)
+}
+
+#[async_trait]
+impl FileAdapter for GlbAdapter {
+    async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
+        let (data, path, prefix, depth, postprocess, config) = read_input!(ai);
+        finish(path, prefix, depth, postprocess, config, parse_glb(&data))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// STL
+// ---------------------------------------------------------------------------
+
+lazy_static! {
+    static ref STL_META: AdapterMeta = meta(
+        "stl",
+        "Extracts header and triangle count from binary STL files (ASCII STL is searched as plain text)",
+        &["stl"]
+    );
+}
+
+#[derive(Default)]
+pub struct StlAdapter;
+impl StlAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl GetMetadata for StlAdapter {
+    fn metadata(&self) -> &AdapterMeta {
+        &STL_META
+    }
+}
+
+fn stl_binary_triangle_count(data: &[u8]) -> Option<u32> {
+    if data.len() < 84 {
+        return None;
+    }
+    let count = u32::from_le_bytes(data[80..84].try_into().unwrap());
+    // exact size match distinguishes binary from ascii even when the header
+    // happens to start with "solid"
+    if data.len() as u64 == 84 + 50 * count as u64 {
+        Some(count)
+    } else {
+        None
+    }
+}
+
+#[async_trait]
+impl FileAdapter for StlAdapter {
+    async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
+        let (data, path, prefix, depth, postprocess, config) = read_input!(ai);
+        let text = (|| {
+            if let Some(count) = stl_binary_triangle_count(&data) {
+                let header = String::from_utf8_lossy(&data[..80]);
+                let header = header.trim_end_matches('\0').trim();
+                let mut out = String::from("format: binary stl\n");
+                if !header.is_empty() {
+                    out.push_str(&format!("header: {header}\n"));
+                }
+                out.push_str(&format!("triangles: {count}\n"));
+                return Ok(out);
+            }
+            if data.starts_with(b"solid") {
+                // ASCII STL is plain text; searching the raw file is more useful
+                bail!("ascii stl is plain text");
+            }
+            bail!("unrecognized stl file")
+        })();
+        finish(path, prefix, depth, postprocess, config, text)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PLY
+// ---------------------------------------------------------------------------
+
+lazy_static! {
+    static ref PLY_META: AdapterMeta = meta(
+        "ply",
+        "Extracts element/property structure from binary PLY files (ASCII PLY is searched as plain text)",
+        &["ply"]
+    );
+}
+
+#[derive(Default)]
+pub struct PlyAdapter;
+impl PlyAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl GetMetadata for PlyAdapter {
+    fn metadata(&self) -> &AdapterMeta {
+        &PLY_META
+    }
+}
+
+#[async_trait]
+impl FileAdapter for PlyAdapter {
+    async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
+        let (data, path, prefix, depth, postprocess, config) = read_input!(ai);
+        let text = (|| {
+            if !data.starts_with(b"ply") {
+                bail!("not a ply file");
+            }
+            let header_end = match find_subslice(&data, b"end_header") {
+                Some(i) => i,
+                None => bail!("ply header not terminated"),
+            };
+            let header = String::from_utf8_lossy(&data[..header_end + b"end_header".len()]);
+            let mut format: Option<String> = None;
+            let mut out = String::new();
+            for line in header.lines() {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                match tokens.first().copied() {
+                    Some("format") if tokens.len() >= 2 => {
+                        format = Some(tokens[1].to_string());
+                        out.push_str(&format!("format: {}\n", tokens[1..].join(" ")));
+                    }
+                    Some("comment") => {
+                        out.push_str(&format!("comment: {}\n", tokens[1..].join(" ")));
+                    }
+                    Some("element") if tokens.len() >= 3 => {
+                        out.push_str(&format!("element {}: {}\n", tokens[1], tokens[2]));
+                    }
+                    Some("property") if tokens.len() >= 3 => {
+                        out.push_str(&format!("  property {}\n", tokens[1..].join(" ")));
+                    }
+                    _ => {}
+                }
+            }
+            match format.as_deref() {
+                Some("ascii") => bail!("ascii ply is plain text"),
+                Some(_) => Ok(out),
+                None => bail!("ply header has no format line"),
+            }
+        })();
+        finish(path, prefix, depth, postprocess, config, text)
+    }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// find a keyword at the start of a line ("KEYWORD" or "KEYWORD ..."),
+/// returning the byte offset of the line start
+fn find_line_keyword(haystack: &[u8], keyword: &[u8]) -> Option<usize> {
+    let mut pos = 0;
+    loop {
+        let rel = find_subslice(&haystack[pos..], keyword)?;
+        let line_start = pos + rel;
+        let at_line_start = line_start == 0
+            || haystack[line_start - 1] == b'\n'
+            || haystack[line_start - 1] == b'\r';
+        let after = line_start + keyword.len();
+        let at_word_end = after >= haystack.len()
+            || haystack[after] == b' '
+            || haystack[after] == b'\t'
+            || haystack[after] == b'\n'
+            || haystack[after] == b'\r';
+        if at_line_start && at_word_end {
+            return Some(line_start);
+        }
+        pos = line_start + 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FBX (binary)
+// ---------------------------------------------------------------------------
+
+lazy_static! {
+    static ref FBX_META: AdapterMeta = AdapterMeta {
+        name: "fbx".to_owned(),
+        version: 1,
+        description: "Extracts the node tree and string properties from binary Autodesk FBX files (ASCII FBX is searched as plain text)".to_owned(),
+        recurses: true,
+        fast_matchers: vec![FastFileMatcher::FileExtension("fbx".to_string())],
+        slow_matchers: None,
+        keep_fast_matchers_if_accurate: true,
+        disabled_by_default: false,
+    };
+    static ref FBX_MAGIC: &'static [u8] = b"Kaydara FBX Binary  \x00\x1a\x00";
+}
+
+const FBX_MAX_LINES: usize = 100_000;
+
+#[derive(Default)]
+pub struct FbxAdapter;
+impl FbxAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl GetMetadata for FbxAdapter {
+    fn metadata(&self) -> &AdapterMeta {
+        &FBX_META
+    }
+}
+
+struct FbxReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+    big: bool, // version >= 7500: 64-bit node record fields
+    lines: usize,
+}
+
+impl<'a> FbxReader<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+        if self.pos + n > self.data.len() {
+            bail!("fbx: unexpected end of file");
+        }
+        let s = &self.data[self.pos..self.pos + n];
+        self.pos += n;
+        Ok(s)
+    }
+    fn u32(&mut self) -> Result<u32> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+    fn u64(&mut self) -> Result<u64> {
+        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+    fn offset(&mut self) -> Result<u64> {
+        if self.big {
+            self.u64()
+        } else {
+            Ok(self.u32()? as u64)
+        }
+    }
+    /// size of one null record at the current format width
+    fn null_size(&self) -> usize {
+        if self.big { 25 } else { 13 }
+    }
+}
+
+fn fbx_prop_string(r: &mut FbxReader) -> Result<Option<String>> {
+    let code = *r.take(1)?.first().unwrap();
+    match code {
+        b'Y' => {
+            r.take(2)?;
+        }
+        b'C' => {
+            r.take(1)?;
+        }
+        b'I' => {
+            r.take(4)?;
+        }
+        b'F' => {
+            r.take(4)?;
+        }
+        b'D' => {
+            r.take(8)?;
+        }
+        b'L' => {
+            r.take(8)?;
+        }
+        b'S' | b'R' => {
+            let len = r.u32()? as usize;
+            let bytes = r.take(len)?;
+            if code == b'S' {
+                return Ok(Some(String::from_utf8_lossy(bytes).into_owned()));
+            }
+        }
+        b'f' | b'd' | b'l' | b'i' | b'b' => {
+            let array_len = r.u32()? as usize;
+            let encoding = r.u32()?;
+            let comp_len = r.u32()? as usize;
+            r.take(comp_len)?;
+            let _ = (array_len, encoding);
+        }
+        other => bail!("fbx: unknown property type code {other:#x}"),
+    }
+    Ok(None)
+}
+
+/// read one node record; returns None on a null record (list terminator)
+fn fbx_read_node(r: &mut FbxReader, out: &mut String, depth: usize) -> Result<Option<()>> {
+    let record_start = r.pos;
+    let end_offset = r.offset()?;
+    let num_props = r.offset()?;
+    let _prop_list_len = r.offset()?;
+    let name_len = *r.take(1)?.first().unwrap() as usize;
+    let name = String::from_utf8_lossy(r.take(name_len)?).into_owned();
+
+    if end_offset == 0 {
+        // null record: rewind so the caller can also detect it, then stop
+        r.pos = record_start;
+        return Ok(None);
+    }
+
+    if r.lines >= FBX_MAX_LINES {
+        return Ok(Some(()));
+    }
+    r.lines += 1;
+
+    let mut strings = Vec::new();
+    for _ in 0..num_props {
+        if let Some(s) = fbx_prop_string(r)? {
+            // keep path-relevant strings (connections, names, types)
+            if strings.len() < 8 {
+                strings.push(s);
+            }
+        }
+    }
+
+    let indent = "  ".repeat(depth);
+    if strings.is_empty() {
+        out.push_str(&format!("{indent}{name}\n"));
+    } else {
+        out.push_str(&format!("{indent}{name}: {}\n", strings.join(" | ")));
+    }
+
+    // nested nodes until the null record marking the end of this node
+    let body_end = end_offset as usize;
+    loop {
+        if r.pos + r.null_size() > r.data.len() {
+            break;
+        }
+        // peek: a null record is all zeroes
+        if r.data[r.pos..r.pos + r.null_size()].iter().all(|b| *b == 0) {
+            r.pos += r.null_size();
+            break;
+        }
+        if r.pos >= body_end {
+            break;
+        }
+        fbx_read_node(r, out, depth + 1)?;
+    }
+    // be tolerant about trailing padding
+    if r.pos < body_end && body_end <= r.data.len() {
+        r.pos = body_end;
+    }
+    Ok(Some(()))
+}
+
+fn parse_fbx(data: &[u8]) -> Result<String> {
+    if data.len() < 27 || &data[..FBX_MAGIC.len()] != *FBX_MAGIC {
+        bail!("not a binary fbx file");
+    }
+    let version = u32::from_le_bytes(data[23..27].try_into().unwrap());
+    let mut out = format!("fbx_version: {version}\n");
+    let mut r = FbxReader {
+        data,
+        pos: 27,
+        big: version >= 7500,
+        lines: 0,
+    };
+    while r.pos + r.null_size() <= r.data.len() {
+        if r.data[r.pos..r.pos + r.null_size()].iter().all(|b| *b == 0) {
+            break;
+        }
+        if fbx_read_node(&mut r, &mut out, 0)?.is_none() {
+            break;
+        }
+        if r.lines >= FBX_MAX_LINES {
+            out.push_str("... (output truncated)\n");
+            break;
+        }
+    }
+    Ok(out)
+}
+
+#[async_trait]
+impl FileAdapter for FbxAdapter {
+    async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
+        let (data, filepath_hint, prefix, depth, postprocess, config) = read_input!(ai);
+        match parse_fbx(&data) {
+            Ok(text) => text_result(filepath_hint, prefix, depth, postprocess, config, text),
+            Err(e) => {
+                // ASCII FBX is plain text and better searched raw
+                if data.starts_with(b"; FBX") || data.starts_with(b"FBXHeaderExtension") {
+                    return Err(adapter_bail("ascii fbx is plain text"));
+                }
+                Err(format_err!("fbx: {e} in {}", filepath_hint.display()))
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// VTK legacy format (binary)
+// ---------------------------------------------------------------------------
+
+lazy_static! {
+    static ref VTK_META: AdapterMeta = meta(
+        "vtk",
+        "Extracts title, dataset type and dimensions from binary legacy VTK files (ASCII VTK is searched as plain text)",
+        &["vtk"]
+    );
+    /// keywords after which the binary payload begins (header ends here)
+    static ref VTK_PAYLOAD_KEYWORDS: std::collections::HashSet<&'static str> = [
+        "POINTS", "CELLS", "POLYGONS", "VERTICES", "LINES", "TRIANGLE_STRIPS",
+        "FIELD", "SCALARS", "VECTORS", "NORMALS", "TEXTURE_COORDINATES",
+        "TENSORS", "LOOKUP_TABLE", "COLOR_SCALARS",
+    ]
+    .into_iter()
+    .collect();
+}
+
+#[derive(Default)]
+pub struct VtkAdapter;
+impl VtkAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl GetMetadata for VtkAdapter {
+    fn metadata(&self) -> &AdapterMeta {
+        &VTK_META
+    }
+}
+
+#[async_trait]
+impl FileAdapter for VtkAdapter {
+    async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
+        let (data, path, prefix, depth, postprocess, config) = read_input!(ai);
+        let text = (|| {
+            if !data.starts_with(b"# vtk DataFile Version") {
+                bail!("not a legacy vtk file");
+            }
+            let header_bytes = &data[..data.len().min(1 << 20)];
+            let header = String::from_utf8_lossy(header_bytes);
+            let mut out = String::new();
+            let mut dataset: Option<String> = None;
+            let mut is_binary = false;
+            for (i, line) in header.lines().enumerate() {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                let keyword = tokens.first().copied().unwrap_or("");
+                if VTK_PAYLOAD_KEYWORDS.contains(keyword) {
+                    break; // the rest is payload
+                }
+                match (i, keyword) {
+                    (0, _) => out.push_str(&format!(
+                        "vtk_version: {}\n",
+                        line.trim_start_matches("# vtk DataFile Version").trim()
+                    )),
+                    (1, _) => out.push_str(&format!("title: {}\n", line.trim())),
+                    (_, "BINARY") => is_binary = true,
+                    (_, "ASCII") => bail!("ascii vtk is plain text"),
+                    (_, "DATASET") if tokens.len() >= 2 => {
+                        dataset = Some(tokens[1].to_string());
+                    }
+                    (_, "DIMENSIONS" | "ORIGIN" | "SPACING" | "ASPECT_RATIO" | "EXTENT") => {
+                        out.push_str(&format!(
+                            "{}: {}\n",
+                            keyword.to_lowercase(),
+                            tokens[1..].join(" ")
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            if !is_binary {
+                bail!("unrecognized vtk header (neither ASCII nor BINARY declared)");
+            }
+            out.push_str(&format!(
+                "dataset: {}\n",
+                dataset.unwrap_or_else(|| "UNKNOWN".into())
+            ));
+            Ok(out)
+        })();
+        finish(path, prefix, depth, postprocess, config, text)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PCD (Point Cloud Data, ROS/robotics)
+// ---------------------------------------------------------------------------
+
+lazy_static! {
+    static ref PCD_META: AdapterMeta = meta(
+        "pcd",
+        "Extracts the field/point structure from binary PCD point-cloud files (ASCII PCD is searched as plain text)",
+        &["pcd"]
+    );
+}
+
+#[derive(Default)]
+pub struct PcdAdapter;
+impl PcdAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl GetMetadata for PcdAdapter {
+    fn metadata(&self) -> &AdapterMeta {
+        &PCD_META
+    }
+}
+
+#[async_trait]
+impl FileAdapter for PcdAdapter {
+    async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
+        let (data, path, prefix, depth, postprocess, config) = read_input!(ai);
+        let text = (|| {
+            // the PCD header is ASCII even in binary files; it ends with the
+            // DATA line, after which the payload begins. The keyword must be
+            // line-anchored: comments can contain the word, and a binary
+            // payload can contain the raw bytes "DATA ".
+            let data_line = find_line_keyword(&data, b"DATA")
+                .ok_or_else(|| anyhow::anyhow!("pcd: no DATA line in header"))?;
+            let header = String::from_utf8_lossy(&data[..data_line]).into_owned();
+            let mut fields = String::new();
+            let mut sizes = String::new();
+            let mut types = String::new();
+            let mut count = String::new();
+            let mut width = String::new();
+            let mut height = String::new();
+            let mut points = String::new();
+            let mut data_kind = "";
+            for line in header.lines() {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                match tokens.first().copied() {
+                    Some("FIELDS") | Some("COLUMNS") => fields = tokens[1..].join(" "),
+                    Some("SIZE") => sizes = tokens[1..].join(" "),
+                    Some("TYPE") => types = tokens[1..].join(" "),
+                    Some("COUNT") => count = tokens[1..].join(" "),
+                    Some("WIDTH") => width = tokens.get(1).copied().unwrap_or("").to_string(),
+                    Some("HEIGHT") => height = tokens.get(1).copied().unwrap_or("").to_string(),
+                    Some("POINTS") => points = tokens.get(1).copied().unwrap_or("").to_string(),
+                    Some("#") | Some("VERSION") | Some("VIEWPOINT") | None => {}
+                    _ => {}
+                }
+            }
+            // locate the DATA keyword itself and read its argument
+            let after = &data[data_line..];
+            let line_end = after
+                .iter()
+                .position(|b| *b == b'\n')
+                .unwrap_or(after.len());
+            let data_line_str = String::from_utf8_lossy(&after[..line_end]);
+            let data_tokens: Vec<&str> = data_line_str.split_whitespace().collect();
+            if data_tokens.len() >= 2 {
+                data_kind = data_tokens[1];
+            }
+            match data_kind {
+                "ascii" => bail!("ascii pcd is plain text"),
+                "binary" | "binary_compressed" => {}
+                other => bail!("pcd: unsupported DATA type {other:?}"),
+            }
+            let mut out = format!("data: {data_kind}\n");
+            if !fields.is_empty() {
+                out.push_str(&format!("fields: {fields}\n"));
+            }
+            if !types.is_empty() {
+                out.push_str(&format!("types: {types}\n"));
+            }
+            if !sizes.is_empty() {
+                out.push_str(&format!("sizes: {sizes}\n"));
+            }
+            if !count.is_empty() {
+                out.push_str(&format!("count: {count}\n"));
+            }
+            if !width.is_empty() {
+                out.push_str(&format!("width: {width}\n"));
+            }
+            if !height.is_empty() {
+                out.push_str(&format!("height: {height}\n"));
+            }
+            out.push_str(&format!(
+                "points: {}\n",
+                if points.is_empty() { "?" } else { &points }
+            ));
+            Ok(out)
+        })();
+        finish(path, prefix, depth, postprocess, config, text)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LAS / LAZ (lidar point clouds)
+// ---------------------------------------------------------------------------
+
+lazy_static! {
+    static ref LAS_META: AdapterMeta = AdapterMeta {
+        name: "las".to_owned(),
+        version: 1,
+        description: "Extracts version, point format, counts and bounding box from LAS/LAZ lidar files (header only; point payloads are not decoded)".to_owned(),
+        recurses: true,
+        fast_matchers: vec![
+            FastFileMatcher::FileExtension("las".to_string()),
+            FastFileMatcher::FileExtension("laz".to_string()),
+        ],
+        slow_matchers: None,
+        keep_fast_matchers_if_accurate: true,
+        disabled_by_default: false,
+    };
+}
+
+#[derive(Default)]
+pub struct LasAdapter;
+impl LasAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+impl GetMetadata for LasAdapter {
+    fn metadata(&self) -> &AdapterMeta {
+        &LAS_META
+    }
+}
+
+fn parse_las(data: &[u8]) -> Result<String> {
+    // the LAS public header is 227 bytes in every version (1.0-1.4);
+    // LAS 1.4 R&R appends an extended tail (375 bytes total)
+    if data.len() < 227 || &data[0..4] != b"LASF" {
+        bail!("not a LAS file (bad magic or truncated header)");
+    }
+    let major = data[24];
+    let minor = data[25];
+    let point_format = data[104] & 0x3f; // high bits are flags in LAS >= 1.4
+    let record_len = u16::from_le_bytes(data[105..107].try_into().unwrap());
+    let legacy_count = u32::from_le_bytes(data[107..111].try_into().unwrap());
+    // LAS 1.4 stores the true count as u64 at offset 247 when it overflows
+    let count = if legacy_count == 0 && data.len() >= 255 {
+        u64::from_le_bytes(data[247..255].try_into().unwrap())
+    } else {
+        legacy_count as u64
+    };
+    // ASPRS LAS header layout (all little-endian f64):
+    //   X scale 131, Y scale 139, Z scale 147
+    //   X offset 155, Y offset 163, Z offset 171
+    //   max X 179, min X 187, max Y 195, min Y 203, max Z 211, min Z 219
+    let get_f64 = |off: usize| f64::from_le_bytes(data[off..off + 8].try_into().unwrap());
+    let (scale_x, scale_y, scale_z) = (get_f64(131), get_f64(139), get_f64(147));
+    let (max_x, min_x) = (get_f64(179), get_f64(187));
+    let (max_y, min_y) = (get_f64(195), get_f64(203));
+    let (max_z, min_z) = (get_f64(211), get_f64(219));
+    Ok(format!(
+        "las_version: {major}.{minor}\npoint_format: {point_format}\nrecord_length: {record_len}\npoints: {count}\nscale: {scale_x} {scale_y} {scale_z}\nmin_x: {min_x}\nmax_x: {max_x}\nmin_y: {min_y}\nmax_y: {max_y}\nmin_z: {min_z}\nmax_z: {max_z}\n"
+    ))
+}
+
+#[async_trait]
+impl FileAdapter for LasAdapter {
+    async fn adapt(&self, ai: AdaptInfo, _d: &FileMatcher) -> Result<AdaptedFilesIterBox> {
+        let (data, path, prefix, depth, postprocess, config) = read_input!(ai);
+        let text = parse_las(&data);
+        finish(path, prefix, depth, postprocess, config, text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::*;
+    use pretty_assertions::assert_eq;
+    use std::io::Cursor;
+
+    async fn adapt_to_string(
+        adapter: impl FileAdapter,
+        name: &str,
+        data: Vec<u8>,
+    ) -> Result<String> {
+        let (a, d) = simple_adapt_info(std::path::Path::new(name), Box::pin(Cursor::new(data)));
+        let out = adapter.adapt(a, &d).await?;
+        Ok(String::from_utf8(adapted_to_vec(out).await?)?
+            .trim()
+            .to_string())
+    }
+
+    fn make_binary_stl(header: &[u8; 80], triangles: u32) -> Vec<u8> {
+        let mut v = header.to_vec();
+        v.extend_from_slice(&triangles.to_le_bytes());
+        v.resize(84 + 50 * triangles as usize, 0);
+        v
+    }
+
+    #[tokio::test]
+    async fn stl_binary() -> Result<()> {
+        let mut header = [0u8; 80];
+        header[..9].copy_from_slice(b"test part");
+        let data = make_binary_stl(&header, 42);
+        let out = adapt_to_string(StlAdapter, "part.stl", data).await?;
+        assert_eq!(out, "format: binary stl\nheader: test part\ntriangles: 42");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stl_ascii_bails() {
+        let data = b"solid ascii\nendsolid".to_vec();
+        let (a, d) = simple_adapt_info(std::path::Path::new("a.stl"), Box::pin(Cursor::new(data)));
+        let res = StlAdapter.adapt(a, &d).await;
+        let err = res.err().expect("should bail");
+        assert!(err.downcast_ref::<AdapterBail>().is_some(), "got {err:?}");
+    }
+
+    fn make_glb(json: &str, bin_len: usize) -> Vec<u8> {
+        let mut glb = Vec::new();
+        let total = 12 + 8 + json.len() + if bin_len > 0 { 8 + bin_len } else { 0 };
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total as u32).to_le_bytes());
+        glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(json.as_bytes());
+        if bin_len > 0 {
+            glb.extend_from_slice(&(bin_len as u32).to_le_bytes());
+            glb.extend_from_slice(b"BIN\0");
+            glb.resize(glb.len() + bin_len, 0);
+        }
+        glb
+    }
+
+    #[tokio::test]
+    async fn glb_json_chunk() -> Result<()> {
+        let glb = make_glb(
+            r#"{"asset":{"version":"2.0"},"meshes":[{"name":"cube"}]}"#,
+            120,
+        );
+        let out = adapt_to_string(GlbAdapter, "scene.glb", glb).await?;
+        assert!(out.contains("glb_version: 2"));
+        assert!(out.contains("\"version\": \"2.0\""), "got {out}");
+        assert!(out.contains("cube"));
+        assert!(out.contains("bin_chunk_bytes: 120"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ply_binary_header() -> Result<()> {
+        let header = b"ply\nformat binary_little_endian 1.0\ncomment made by test\nelement vertex 3\nproperty float x\nproperty float y\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n";
+        let mut data = header.to_vec();
+        data.resize(header.len() + 100, 0);
+        let out = adapt_to_string(PlyAdapter, "scan.ply", data).await?;
+        assert!(out.contains("format: binary_little_endian 1.0"));
+        assert!(out.contains("element vertex: 3"));
+        assert!(out.contains("property float x"));
+        assert!(out.contains("comment: made by test"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ply_ascii_bails() {
+        let data = b"ply\nformat ascii 1.0\nelement vertex 1\nend_header\n0 0 0\n".to_vec();
+        let (a, d) = simple_adapt_info(std::path::Path::new("a.ply"), Box::pin(Cursor::new(data)));
+        let res = PlyAdapter.adapt(a, &d).await;
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
+    }
+
+    fn make_fbx(version: u32, node_name: &str, prop: &str) -> Vec<u8> {
+        // small-format node: end, nprops, proplen, namelen, name, prop('S'), null(13)
+        let name = node_name.as_bytes();
+        let pb = prop.as_bytes();
+        let node_len = 13 + name.len() + 5 + pb.len() + 13;
+        let mut v = Vec::new();
+        v.extend_from_slice(*FBX_MAGIC);
+        v.extend_from_slice(&version.to_le_bytes());
+        // one top-level node
+        v.extend_from_slice(&(27 + node_len as u32).to_le_bytes()); // end offset
+        v.extend_from_slice(&1u32.to_le_bytes()); // num props
+        v.extend_from_slice(&((5 + pb.len()) as u32).to_le_bytes()); // prop list len
+        v.push(name.len() as u8);
+        v.extend_from_slice(name);
+        v.push(b'S');
+        v.extend_from_slice(&(pb.len() as u32).to_le_bytes());
+        v.extend_from_slice(pb);
+        v.extend_from_slice(&[0u8; 13]); // null record
+        v
+    }
+
+    #[tokio::test]
+    async fn fbx_binary_strings() -> Result<()> {
+        let fbx = make_fbx(7400, "Objects", "Geometry::cube");
+        let out = adapt_to_string(FbxAdapter, "cube.fbx", fbx).await?;
+        assert!(out.contains("fbx_version: 7400"));
+        assert!(out.contains("Objects: Geometry::cube"), "got {out}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fbx_ascii_bails() {
+        let data = b"; FBX 7.4.0\nFBXHeaderExtension:  {\n}".to_vec();
+        let (a, d) = simple_adapt_info(std::path::Path::new("a.fbx"), Box::pin(Cursor::new(data)));
+        let res = FbxAdapter.adapt(a, &d).await;
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PCD
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn pcd_binary_header() -> Result<()> {
+        let header = b"# .PCD v0.7\nVERSION 0.7\nFIELDS x y z intensity\nSIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\nWIDTH 100\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS 100\nDATA binary\n";
+        let mut data = header.to_vec();
+        data.resize(header.len() + 100 * 16, 0);
+        let out = adapt_to_string(PcdAdapter, "scan.pcd", data).await?;
+        assert!(out.contains("fields: x y z intensity"), "got {out}");
+        assert!(out.contains("points: 100"));
+        assert!(out.contains("data: binary"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pcd_ascii_bails() {
+        let data = b"# .PCD v0.7\nFIELDS x y z\nDATA ascii\n0 0 0\n".to_vec();
+        let (a, d) = simple_adapt_info(std::path::Path::new("a.pcd"), Box::pin(Cursor::new(data)));
+        let res = PcdAdapter.adapt(a, &d).await;
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn pcd_data_keyword_must_be_line_anchored() {
+        // "DATA " must not match inside a comment line or other text
+        let header = b"# .PCD v0.7\n# note: DATA fields follow\nVERSION 0.7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\nWIDTH 2\nHEIGHT 1\nPOINTS 2\nDATA binary\n";
+        let mut data = header.to_vec();
+        data.resize(header.len() + 2 * 12, 0);
+        let out = adapt_to_string(PcdAdapter, "scan.pcd", data).await.unwrap();
+        assert!(out.contains("fields: x y z"), "got {out}");
+        assert!(out.contains("points: 2"), "got {out}");
+        assert!(out.contains("data: binary"), "got {out}");
+    }
+
+    // -----------------------------------------------------------------------
+    // LAS / LAZ
+    // -----------------------------------------------------------------------
+
+    fn make_las() -> Vec<u8> {
+        // ASPRS layout: 227-byte public header (LAS 1.4 R&R tail is optional)
+        let mut v = vec![0u8; 227];
+        v[0..4].copy_from_slice(b"LASF");
+        v[24] = 1; // major
+        v[25] = 4; // minor
+        v[94..96].copy_from_slice(&227u16.to_le_bytes()); // header size
+        v[104] = 6; // point data record format
+        v[105..107].copy_from_slice(&30u16.to_le_bytes()); // record length
+        v[107..111].copy_from_slice(&12345u32.to_le_bytes()); // point count
+        // X scale @131; bounds: maxX 179, minX 187, maxY 195, minY 203,
+        // maxZ 211, minZ 219 (all little-endian f64)
+        v[131..139].copy_from_slice(&0.001f64.to_le_bytes());
+        v[179..187].copy_from_slice(&100.0f64.to_le_bytes()); // max x
+        v[187..195].copy_from_slice(&(-100.0f64).to_le_bytes()); // min x
+        v[195..203].copy_from_slice(&200.0f64.to_le_bytes()); // max y
+        v[203..211].copy_from_slice(&(-200.0f64).to_le_bytes()); // min y
+        v[211..219].copy_from_slice(&50.0f64.to_le_bytes()); // max z
+        v[219..227].copy_from_slice(&(-50.0f64).to_le_bytes()); // min z
+        v
+    }
+
+    #[tokio::test]
+    async fn las_header() -> Result<()> {
+        let out = adapt_to_string(LasAdapter, "survey.las", make_las()).await?;
+        assert!(out.contains("las_version: 1.4"), "got {out}");
+        assert!(out.contains("point_format: 6"));
+        assert!(out.contains("points: 12345"));
+        assert!(out.contains("min_x: -100"), "got {out}");
+        assert!(out.contains("max_y: 200"), "got {out}");
+        assert!(out.contains("min_z: -50"), "got {out}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn las_accepts_minimal_227_byte_header() {
+        // real LAS 1.0-1.3 files have exactly a 227-byte header
+        let out = adapt_to_string(LasAdapter, "legacy.las", make_las()).await;
+        assert!(out.is_ok(), "227-byte header must be accepted: {out:?}");
+    }
+
+    #[tokio::test]
+    async fn las_rejects_bad_magic() {
+        let mut data = make_las();
+        data[0..4].copy_from_slice(b"NOPE");
+        let (a, d) = simple_adapt_info(std::path::Path::new("x.las"), Box::pin(Cursor::new(data)));
+        let res = LasAdapter.adapt(a, &d).await;
+        assert!(
+            res.err()
+                .expect("should fail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // VTK
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn vtk_binary_header() -> Result<()> {
+        let header = b"# vtk DataFile Version 3.0\nsimulation grid\nelevator shaft\nBINARY\nDATASET STRUCTURED_GRID\nDIMENSIONS 10 20 30\nPOINTS 6000 float\n";
+        let mut data = header.to_vec();
+        data.resize(header.len() + 6000 * 4, 0);
+        let out = adapt_to_string(VtkAdapter, "grid.vtk", data).await?;
+        assert!(out.contains("vtk_version: 3.0"), "got {out}");
+        assert!(out.contains("title: simulation grid"), "got {out}");
+        assert!(out.contains("dataset: STRUCTURED_GRID"), "got {out}");
+        assert!(out.contains("dimensions: 10 20 30"), "got {out}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn vtk_ascii_bails() {
+        let data = b"# vtk DataFile Version 3.0\nt\nASCII\nDATASET POLYDATA\n".to_vec();
+        let (a, d) = simple_adapt_info(std::path::Path::new("a.vtk"), Box::pin(Cursor::new(data)));
+        let res = VtkAdapter.adapt(a, &d).await;
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
+    }
+}
