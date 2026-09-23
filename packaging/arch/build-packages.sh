@@ -28,6 +28,9 @@ build_variant() {
   local clean="${PKGVER%%-*}"
   sed -i "s/^pkgver=.*/pkgver=$clean/" "$scratch/PKGBUILD"
   sed -i "s|archive/refs/tags/v\${pkgver}|archive/refs/tags/v$PKGVER|" "$scratch/PKGBUILD"
+  # GitHub tarballs extract to <repo>-<full-tag>, so every cd into the source
+  # tree must use the full tag, not the cleaned pkgver.
+  sed -i "s|ripgrep-all-\${pkgver}|ripgrep-all-$PKGVER|g" "$scratch/PKGBUILD"
   # shellcheck disable=SC2164
   cd "$scratch"
   # The sha256 of the release tarball only exists once the tag does, so
