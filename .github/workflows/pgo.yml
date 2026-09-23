@@ -89,6 +89,7 @@ jobs:
           python-version: "3.x"
 
       - name: Install tools
+        shell: bash
         run: |
           pip install reportlab python-docx
           # poppler + pandoc for training coverage of those adapters
@@ -101,7 +102,10 @@ jobs:
 
       - name: Build PGO variant
         shell: bash
-        run: bash packaging/pgo/build-pgo.sh x86_64-pc-windows-msvc dist-pgo "${GITHUB_REF_NAME#v}"
+        run: |
+          echo "pdftotext resolved to: $(command -v pdftotext)"
+          pdftotext -v 2>&1 | head -1
+          bash packaging/pgo/build-pgo.sh x86_64-pc-windows-msvc dist-pgo "${GITHUB_REF_NAME#v}"
 
       - name: Wait for the GitHub release
         shell: bash
