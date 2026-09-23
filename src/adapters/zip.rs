@@ -63,7 +63,9 @@ impl Drop for StreamingEntryReader {
 
 // TODO: allow users to configure file extensions instead of hard coding the list
 // https://github.com/phiresky/ripgrep-all/pull/208#issuecomment-2173241243
-static EXTENSIONS: &[&str] = &["zip", "jar", "xpi", "kra", "snagx", "3mf", "usdz"];
+static EXTENSIONS: &[&str] = &[
+    "zip", "zipx", "jar", "xpi", "kra", "snagx", "3mf", "usdz", "cbz",
+];
 
 lazy_static! {
     static ref METADATA: AdapterMeta = AdapterMeta {
@@ -434,7 +436,16 @@ mod test {
             let (mut ai, reason) =
                 simple_adapt_info(&path, Box::pin(std::io::Cursor::new(bytes.clone())));
             ai.is_real_file = is_real_file;
-            let output = adapted_to_vec(loop_adapt(&ZipAdapter::new(), reason, ai, crate::adapters::get_all_adapters(None).0).await?).await?;
+            let output = adapted_to_vec(
+                loop_adapt(
+                    &ZipAdapter::new(),
+                    reason,
+                    ai,
+                    crate::adapters::get_all_adapters(None).0,
+                )
+                .await?,
+            )
+            .await?;
             assert_eq!(
                 String::from_utf8(output)?,
                 "PREFIX:dir/first.txt: first\nPREFIX:second.txt: second\n"
@@ -455,7 +466,16 @@ mod test {
         let path = dir.path().join("corrupt.zip");
         tokio::fs::write(&path, bytes).await?;
         let (ai, reason) = simple_fs_adapt_info(&path).await?;
-        let result = adapted_to_vec(loop_adapt(&ZipAdapter::new(), reason, ai, crate::adapters::get_all_adapters(None).0).await?).await;
+        let result = adapted_to_vec(
+            loop_adapt(
+                &ZipAdapter::new(),
+                reason,
+                ai,
+                crate::adapters::get_all_adapters(None).0,
+            )
+            .await?,
+        )
+        .await;
         assert!(
             result.is_err(),
             "corrupted ZIP content must fail validation"
@@ -467,7 +487,16 @@ mod test {
     async fn only_seek_zip_fs() -> Result<()> {
         let zip = test_data_dir().join("only-seek-zip.zip");
         let (a, d) = simple_fs_adapt_info(&zip).await?;
-        let _v = adapted_to_vec(loop_adapt(&ZipAdapter::new(), d, a, crate::adapters::get_all_adapters(None).0).await?).await?;
+        let _v = adapted_to_vec(
+            loop_adapt(
+                &ZipAdapter::new(),
+                d,
+                a,
+                crate::adapters::get_all_adapters(None).0,
+            )
+            .await?,
+        )
+        .await?;
         Ok(())
     }
 
@@ -480,7 +509,10 @@ mod test {
             &PathBuf::from("outer.zip"),
             Box::pin(std::io::Cursor::new(zipfile)),
         );
-        let buf = adapted_to_vec(loop_adapt(&adapter, d, a, crate::adapters::get_all_adapters(None).0).await?).await?;
+        let buf = adapted_to_vec(
+            loop_adapt(&adapter, d, a, crate::adapters::get_all_adapters(None).0).await?,
+        )
+        .await?;
 
         assert_eq!(
             String::from_utf8(buf)?,

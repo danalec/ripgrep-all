@@ -15,7 +15,7 @@ use tokio_stream::StreamExt;
 
 use super::{AdaptInfo, FileAdapter, GetMetadata};
 
-static EXTENSIONS: &[&str] = &["tar"];
+static EXTENSIONS: &[&str] = &["tar", "pax"];
 
 lazy_static! {
     static ref METADATA: AdapterMeta = AdapterMeta {
@@ -110,7 +110,9 @@ mod tests {
         let (a, d) = simple_adapt_info(&filepath, Box::pin(File::open(&filepath).await?));
 
         let adapter = TarAdapter::new();
-        let r = loop_adapt(&adapter, d, a, crate::adapters::get_all_adapters(None).0).await.context("adapt")?;
+        let r = loop_adapt(&adapter, d, a, crate::adapters::get_all_adapters(None).0)
+            .await
+            .context("adapt")?;
         let o = adapted_to_vec(r).await.context("adapted_to_vec")?;
         assert_eq!(
             String::from_utf8(o).context("parsing utf8")?,

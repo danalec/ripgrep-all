@@ -198,6 +198,33 @@ lazy_static! {
             match_only_by_mime: None,
             output_path_hint: None,
             bail_if_empty_output: None
+        },
+        CustomAdapterConfig {
+            name: "openssl-x509".to_owned(),
+            version: 1,
+            description: "Uses openssl to decode PEM-encoded X.509 certificates (subject, issuer, validity, SANs)".to_owned(),
+            extensions: strs(&["pem", "crt", "cer"]),
+            mimetypes: Some(strs(&["application/x-pem-file", "application/x-x509-ca-cert"])),
+            binary: "openssl".to_string(),
+            args: strs(&["x509", "-noout", "-text"]),
+            // PEM certificates are usually already greppable text; opt-in
+            disabled_by_default: Some(true),
+            match_only_by_mime: None,
+            output_path_hint: None,
+            bail_if_empty_output: None
+        },
+        CustomAdapterConfig {
+            name: "openssl-der".to_owned(),
+            version: 1,
+            description: "Uses openssl to decode DER-encoded X.509 certificates (subject, issuer, validity, SANs)".to_owned(),
+            extensions: strs(&["der"]),
+            mimetypes: Some(strs(&["application/x-x509-ca-cert"])),
+            binary: "openssl".to_string(),
+            args: strs(&["x509", "-inform", "DER", "-noout", "-text"]),
+            disabled_by_default: Some(true),
+            match_only_by_mime: None,
+            output_path_hint: None,
+            bail_if_empty_output: None
         }
     ];
 }
@@ -413,7 +440,9 @@ impl FileAdapter for CustomSpawningFileAdapter {
 
 enum PeekOutcome {
     /// the program produced no text output; decline the file (issue #3)
-    Bailed { reason: String },
+    Bailed {
+        reason: String,
+    },
     Output(ReadBox),
 }
 
@@ -548,7 +577,11 @@ mod test {
             ("page.docx", "--from=docx"),
             ("page.HTM", "--from=html"),
         ] {
-            let cmd = adapter.command(Path::new(file), &RgaConfig::default(), Command::new("pandoc"))?;
+            let cmd = adapter.command(
+                Path::new(file),
+                &RgaConfig::default(),
+                Command::new("pandoc"),
+            )?;
             let debug = format!("{:?}", cmd);
             assert!(
                 debug.contains(expected),
@@ -666,8 +699,8 @@ PREFIX:Page 1:
         #[cfg(unix)]
         let (echo_bin, echo_args) = ("echo", vec!["rescued".to_string()]);
 
-        let mk = |name: &str, binary: &str, args: Vec<String>, bail: Option<bool>| {
-            CustomAdapterConfig {
+        let mk =
+            |name: &str, binary: &str, args: Vec<String>, bail: Option<bool>| CustomAdapterConfig {
                 name: name.to_string(),
                 description: "test adapter".to_string(),
                 disabled_by_default: None,
@@ -679,8 +712,7 @@ PREFIX:Page 1:
                 args,
                 output_path_hint: None,
                 bail_if_empty_output: bail,
-            }
-        };
+            };
 
         let mut config = RgaConfig::default();
         config.cache.disabled = true;
@@ -721,7 +753,10 @@ PREFIX:Page 1:
         // must behave exactly like a normal adapter (the peeked first chunk is
         // prepended to the returned stream, not dropped)
         #[cfg(windows)]
-        let (bin, args) = ("cmd", vec!["/c".to_string(), "echo peeked-output".to_string()]);
+        let (bin, args) = (
+            "cmd",
+            vec!["/c".to_string(), "echo peeked-output".to_string()],
+        );
         #[cfg(unix)]
         let (bin, args) = ("echo", vec!["peeked-output".to_string()]);
 
@@ -810,8 +845,9 @@ PREFIX:Page 1:
         };
         tokio::fs::remove_file(&filepath).await.ok();
         assert!(
-            err.chain()
-                .any(|cause| cause.downcast_ref::<crate::adapters::AdapterBail>().is_some()),
+            err.chain().any(|cause| cause
+                .downcast_ref::<crate::adapters::AdapterBail>()
+                .is_some()),
             "expected an AdapterBail, got: {err:?}"
         );
         Ok(())

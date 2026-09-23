@@ -1,15 +1,15 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+use clap::CommandFactory;
 use rga::adapters::custom::map_exe_error;
 use rga::adapters::*;
 use rga::config::{RgaConfig, split_args};
 use rga::matching::*;
 use rga::print_dur;
 use ripgrep_all as rga;
-use clap::CommandFactory;
 
 use schemars::schema_for;
 use std::process::Command;
@@ -62,14 +62,29 @@ fn list_adapters(args: RgaConfig) -> Result<()> {
 }
 fn doctor() -> Result<()> {
     println!("Checking ripgrep-all dependencies...\n");
-    let binaries = ["rg", "pandoc", "pdftotext", "ffmpeg", "ffprobe", "tesseract"];
+    let binaries = [
+        "rg",
+        "pandoc",
+        "pdftotext",
+        "ffmpeg",
+        "ffprobe",
+        "tesseract",
+    ];
     for bin in binaries {
-        let arg = if bin == "pdftotext" { "-v" } else { "--version" };
+        let arg = if bin == "pdftotext" {
+            "-v"
+        } else {
+            "--version"
+        };
         match Command::new(bin).arg(arg).output() {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                let text = if !stdout.trim().is_empty() { &stdout } else { &stderr };
+                let text = if !stdout.trim().is_empty() {
+                    &stdout
+                } else {
+                    &stderr
+                };
                 let first_line = text.lines().next().unwrap_or("unknown version");
                 println!("✅ {} is installed: {}", bin, first_line);
             }
@@ -125,6 +140,38 @@ async fn main() -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&schema_for!(RgaConfig))?);
         return Ok(());
     }
+    if let Some(ref shell) = config.complete {
+        use clap_complete::{Shell, generate};
+        let shell: Shell = shell.parse().map_err(|_| {
+            anyhow::format_err!(
+                "unknown shell {shell:?} (expected bash, elvish, fish, powershell, zsh or nushell)"
+            )
+        })?;
+        let mut cmd = RgaConfig::command();
+        let name = cmd.get_name().to_string();
+        generate(shell, &mut cmd, name, &mut std::io::stdout());
+        return Ok(());
+    }
+    if config.manpage {
+        let man = clap_mangen::Man::new(RgaConfig::command());
+        man.render(&mut std::io::stdout())?;
+        return Ok(());
+    }
+    if let Some(ref path) = config.save_config {
+        // serde skips is_default fields, so the output is a minimal jsonc
+        let json = serde_json::to_string_pretty(&config)?;
+        let jsonc = format!(
+            "// rga configuration — written by 'rga --rga-save-config'.\n// All omitted fields keep their defaults; see `rga --rga-print-config-schema`.\n{json}\n"
+        );
+        if path == "-" {
+            println!("{jsonc}");
+        } else {
+            std::fs::write(path, jsonc)
+                .with_context(|| format!("Could not write config to {path}"))?;
+            println!("✅ Configuration written to {path}");
+        }
+        return Ok(());
+    }
     if config.list_adapters {
         return list_adapters(config);
     }
@@ -151,8 +198,16 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let adapters = get_adapters_filtered(config.custom_adapters.clone(), &config.adapters, &config)?;
-    log::info!("enabled adapters: {}", adapters.iter().map(|a| a.metadata().name.clone()).collect::<Vec<_>>().join(", "));
+    let adapters =
+        get_adapters_filtered(config.custom_adapters.clone(), &config.adapters, &config)?;
+    log::info!(
+        "enabled adapters: {}",
+        adapters
+            .iter()
+            .map(|a| a.metadata().name.clone())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 
     let pre_glob = if !config.accurate {
         let extensions = adapters
@@ -189,7 +244,10 @@ async fn main() -> anyhow::Result<()> {
         .arg("--pre-glob")
         .arg(pre_glob)
         .args(passthrough_args)
-        .env("RGA_CONFIG", serde_json::to_string(&config).unwrap_or_else(|_| String::new()))
+        .env(
+            "RGA_CONFIG",
+            serde_json::to_string(&config).unwrap_or_else(|_| String::new()),
+        )
         .env("PATH", new_path)
         .stderr(std::process::Stdio::piped());
     log::debug!("rg command to run: {:?}", cmd);

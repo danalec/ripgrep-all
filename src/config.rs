@@ -1,14 +1,14 @@
 use crate::{adapters::custom::CustomAdapterConfig, project_dirs};
 use anyhow::{Context, Result};
+use clap::Parser;
 use derive_more::FromStr;
 use log::*;
+use once_cell::sync::OnceCell;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::io::Read;
 use std::{fs::File, io::Write, iter::IntoIterator, path::PathBuf, str::FromStr};
-use clap::Parser;
-use once_cell::sync::OnceCell;
 
 fn is_default<T: Default + PartialEq>(t: &T) -> bool {
     t == &T::default()
@@ -129,11 +129,7 @@ pub struct RgaConfig {
     /// - "-bar,baz" means use all default adapters except for bar and baz.
     /// - "+bar,baz" means use all default adapters and also bar and baz.
     #[serde(default, skip_serializing_if = "is_default")]
-    #[clap(
-        long = "rga-adapters",
-        require_equals = true,
-        value_delimiter = ','
-    )]
+    #[clap(long = "rga-adapters", require_equals = true, value_delimiter = ',')]
     pub adapters: Vec<String>,
 
     /// Same as rg's `-a` / `--text` flag: search binary data as if it were text.
@@ -205,20 +201,55 @@ pub struct RgaConfig {
     pub rg_version: bool,
 
     #[serde(skip)] // CLI only
-    #[clap(long = "rga-doctor", help = "Check if required external programs are installed")]
+    #[clap(
+        long = "rga-doctor",
+        help = "Check if required external programs are installed"
+    )]
     pub doctor: bool,
 
     #[serde(skip)] // CLI only
-    #[clap(long = "rga-cache-clear", help = "Clear the rga cache database completely")]
+    #[clap(
+        long = "rga-cache-clear",
+        help = "Clear the rga cache database completely"
+    )]
     pub cache_clear: bool,
 
     #[serde(skip)] // CLI only
-    #[clap(long = "rga-cache-prune", help = "Prune the cache (remove old or missing entries)")]
+    #[clap(
+        long = "rga-cache-prune",
+        help = "Prune the cache (remove old or missing entries)"
+    )]
     pub cache_prune: bool,
 
     #[serde(skip)] // CLI only
-    #[clap(long = "rga-daemon", help = "Start a persistent preprocessor daemon to speed up caching")]
+    #[clap(
+        long = "rga-daemon",
+        help = "Start a persistent preprocessor daemon to speed up caching"
+    )]
     pub daemon: bool,
+
+    #[serde(skip)] // CLI only
+    #[clap(
+        long = "rga-save-config",
+        require_equals = true,
+        help = "Write the merged configuration (config file defaults + current flags) to a .jsonc file, or '-' for stdout"
+    )]
+    pub save_config: Option<String>,
+
+    #[serde(skip)] // CLI only
+    #[clap(
+        long = "rga-complete",
+        require_equals = true,
+        help = "Generate shell completions for the given shell (bash, elvish, fish, powershell, zsh, nushell)"
+    )]
+    pub complete: Option<String>,
+
+    #[serde(skip)] // CLI only
+    #[clap(
+        long = "rga-manpage",
+        help = "Generate a man page for rga and print it to stdout"
+    )]
+    pub manpage: bool,
 
     /// Password for encrypted archives.
     #[serde(default)]
@@ -256,7 +287,7 @@ pub struct RgaConfig {
     pub postproc_page_prefix: Option<String>,
 
     #[serde(default)]
-    #[clap(long = "rga-postproc-page-include-empty")] 
+    #[clap(long = "rga-postproc-page-include-empty")]
     pub postproc_page_include_empty: Option<bool>,
 }
 
@@ -493,6 +524,9 @@ where
         res.cache_clear = arg_matches.cache_clear;
         res.cache_prune = arg_matches.cache_prune;
         res.daemon = arg_matches.daemon;
+        res.save_config = arg_matches.save_config;
+        res.complete = arg_matches.complete;
+        res.manpage = arg_matches.manpage;
     }
     Ok(res)
 }
@@ -580,7 +614,6 @@ pub fn split_args(is_rga_preproc: bool) -> Result<(RgaConfig, Vec<OsString>)> {
     debug!("rga (passthrough) args: {:?}", passthrough_args);
     Ok((matches, passthrough_args))
 }
-
 
 #[cfg(test)]
 mod test {
