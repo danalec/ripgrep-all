@@ -21,6 +21,13 @@ build_variant() {
   rm -rf "$scratch"
   mkdir -p "$scratch"
   cp "$HERE/$pkgbuild" "$scratch/PKGBUILD"
+  # Sync pkgver with the version being built: the in-tree PKGBUILD always
+  # lags one release behind. Pre-release tags (vX.Y.Z-devN) can't be used
+  # verbatim: pacman forbids '-' in pkgver, but the source URL must keep the
+  # full tag.
+  local clean="${PKGVER%%-*}"
+  sed -i "s/^pkgver=.*/pkgver=$clean/" "$scratch/PKGBUILD"
+  sed -i "s|archive/refs/tags/v\${pkgver}|archive/refs/tags/v$PKGVER|" "$scratch/PKGBUILD"
   # shellcheck disable=SC2164
   cd "$scratch"
   # The sha256 of the release tarball only exists once the tag does, so
