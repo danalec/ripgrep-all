@@ -6,3 +6,4 @@
 /.vscode/settings.json
 **/*.rs.bk
 packaging/arch/dist/
+benches/corpus/

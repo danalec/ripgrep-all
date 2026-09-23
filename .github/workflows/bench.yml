@@ -1,0 +1,104 @@
+# Runs the preprocess benchmark harness on PRs and main.
+# PRs get a comment with the median throughput per benchmark; main stores the
+# criterion HTML report as an artifact. See benches/README.md.
+name: bench
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "benches/**"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "benches/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  bench:
+    name: preprocess benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install adapter tools
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils pandoc
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Generate corpus
+        run: pip install reportlab python-docx && python benches/gen_corpus.py
+
+      - name: Run benchmarks
+        run: |
+          cargo bench --bench preproc -- --sample-size 10 \
+            > bench-output.txt 2>&1 || (cat bench-output.txt && exit 1)
+
+      - name: Upload criterion report
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-report
+          path: target/criterion
+
+      - name: Summarize results
+        id: summary
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          root = Path("target/criterion")
+          lines = ["| benchmark | median throughput |", "|---|---|"]
+          for est in sorted(root.glob("*/new/estimates.json")):
+              bench = est.parent.parent.name
+              try:
+                  group = json.loads((est.parent.parent / ".." / "benchmarks.json").read_text())["group_id"]
+              except Exception:
+                  group = bench.split("/")[0]
+              data = json.loads(est.read_text())
+              thr = data.get("throughput", {}).get("Bytes", {}).get("mean", {}).get("point_estimate")
+              if thr is None:
+                  continue
+              mib = thr / (1 << 20)
+              lines.append(f"| {group}/{bench} | {mib:.1f} MiB/s |")
+          print("\n".join(lines))
+          EOF
+          cat "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync(process.env.GITHUB_STEP_SUMMARY, 'utf8');
+            const marker = '<!-- rga-bench-results -->';
+            const body = `${marker}\n### Benchmark results\n\n${summary}\n`;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, per_page: 100,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
+              });
+            }
