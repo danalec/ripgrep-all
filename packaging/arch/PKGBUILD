@@ -17,7 +17,12 @@ optdepends=(
   'tesseract: for the OCR image adapter (opt-in)'
 )
 conflicts=('ripgrep-all-bin' 'ripgrep-all-znver4')
-options=('!debug')
+# !lto: makepkg's default `lto` option injects -flto=auto into CFLAGS/LDFLAGS,
+# which the cc crate picks up when compiling bundled C deps (libmimalloc-sys).
+# GCC then emits slim-LTO objects (GIMPLE bytecode only) that the lld used by
+# rustc cannot read -> undefined mi_* symbols at link time. Rust LTO stays
+# controlled by CARGO_PROFILE_RELEASE_LTO below.
+options=('!debug' '!lto')
 source=(
   "${pkgname}-${pkgver}.tar.gz::https://github.com/danalec/ripgrep-all/archive/refs/tags/v${pkgver}.tar.gz"
 )
