@@ -198,6 +198,50 @@ lazy_static! {
             match_only_by_mime: None,
             output_path_hint: None,
             bail_if_empty_output: None
+        },
+        // ugrep+ runs exiftool by default on images; rga keeps it opt-in
+        // because it is an external binary, but registering it as a builtin
+        // means `--rga-adapters=+exiftool` is enough to reach parity.
+        CustomAdapterConfig {
+            name: "exiftool".to_owned(),
+            version: 1,
+            description: "Uses exiftool to dump EXIF/metadata from images as searchable text (reads from stdin)".to_owned(),
+            extensions: strs(&["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif"]),
+            mimetypes: Some(strs(&["image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp", "image/tiff"])),
+            binary: "exiftool".to_string(),
+            // "-" makes exiftool read the file from stdin, so this also works
+            // for images inside archives (unlike the path-based adapters below)
+            args: strs(&["-"]),
+            disabled_by_default: Some(true),
+            match_only_by_mime: None,
+            output_path_hint: None,
+            bail_if_empty_output: None
+        },
+        // soffice cannot read from stdin and needs a seekable path, so files
+        // inside archives are not supported (same limitation as xls2csv above).
+        // NOTE: soffice refuses to run headless while a GUI instance of
+        // LibreOffice is open; conversion fails in that case (same caveat the
+        // ugrep --filter examples carry).
+        CustomAdapterConfig {
+            name: "soffice".to_owned(),
+            version: 1,
+            description: "Uses LibreOffice headless to convert office documents (xlsx, pptx, ppt, ods, odp) to plain text".to_owned(),
+            extensions: strs(&["xlsx", "pptx", "ppt", "ods", "odp"]),
+            mimetypes: Some(strs(&[
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "application/vnd.ms-powerpoint",
+                "application/vnd.oasis.opendocument.spreadsheet",
+                "application/vnd.oasis.opendocument.presentation",
+            ])),
+            binary: "soffice".to_string(),
+            // --cat requires LibreOffice 7.4+; older versions only convert
+            // to files (--convert-to), which does not fit the streaming model
+            args: strs(&["--headless", "--cat", "$input_virtual_path"]),
+            disabled_by_default: Some(true),
+            match_only_by_mime: None,
+            output_path_hint: None,
+            bail_if_empty_output: None
         }
     ];
 }
@@ -597,6 +641,47 @@ PREFIX:Page 1:
         assert!(
             text.contains("PREFIX:Hello RTF fixture"),
             "unexpected output: {text:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn spawning_builtins_exiftool_and_soffice_registered() -> Result<()> {
+        use crate::config::RgaConfig;
+
+        let exiftool = BUILTIN_SPAWNING_ADAPTERS
+            .iter()
+            .find(|e| e.name == "exiftool")
+            .expect("no exiftool adapter");
+        assert_eq!(exiftool.disabled_by_default, Some(true));
+        assert!(exiftool.extensions.iter().any(|e| e == "jpg"));
+        assert!(exiftool.extensions.iter().any(|e| e == "png"));
+        // exiftool reads the image from stdin, so no path placeholder is used
+        assert_eq!(exiftool.args, strs(&["-"]));
+
+        let soffice = BUILTIN_SPAWNING_ADAPTERS
+            .iter()
+            .find(|e| e.name == "soffice")
+            .expect("no soffice adapter");
+        assert_eq!(soffice.disabled_by_default, Some(true));
+        for ext in ["xlsx", "pptx", "ppt", "ods", "odp"] {
+            assert!(
+                soffice.extensions.iter().any(|e| e == ext),
+                "soffice adapter missing extension {ext}"
+            );
+        }
+        // soffice needs a seekable path: the command must carry the expanded
+        // virtual path (which is empty for archive members, declining them)
+        let adapter = soffice.to_adapter();
+        let cmd = adapter.command(
+            std::path::Path::new("sheet.xlsx"),
+            &RgaConfig::default(),
+            tokio::process::Command::new("soffice"),
+        )?;
+        let debug = format!("{cmd:?}");
+        assert!(
+            debug.contains("--headless") && debug.contains("--cat") && debug.contains("sheet.xlsx"),
+            "unexpected soffice command: {debug}"
         );
         Ok(())
     }
