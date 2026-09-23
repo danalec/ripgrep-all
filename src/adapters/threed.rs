@@ -135,15 +135,19 @@ fn parse_glb(data: &[u8]) -> Result<String> {
         bail!("unsupported GLB version {version}");
     }
     let mut out = format!("glb_version: {version}\n");
-    let mut pos = 12;
+    let mut pos = 12usize;
     let mut json_seen = false;
-    while pos + 8 <= data.len() && pos + 8 <= total_len.max(pos + 8) {
+    while pos + 8 <= data.len() {
         let chunk_len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
         let chunk_type = &data[pos + 4..pos + 8];
         let start = pos + 8;
-        let end = start + chunk_len;
-        if end > data.len() {
-            bail!("GLB chunk overruns file");
+        // checked arithmetic: a corrupt chunk_len must not wrap around
+        let end = match start.checked_add(chunk_len) {
+            Some(end) if end <= data.len() => end,
+            _ => bail!("GLB chunk overruns file"),
+        };
+        if end > total_len && total_len <= data.len() {
+            bail!("GLB chunk overruns declared file length");
         }
         match chunk_type {
             b"JSON" => {
@@ -322,6 +326,29 @@ impl FileAdapter for PlyAdapter {
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// find a keyword at the start of a line ("KEYWORD" or "KEYWORD ..."),
+/// returning the byte offset of the line start
+fn find_line_keyword(haystack: &[u8], keyword: &[u8]) -> Option<usize> {
+    let mut pos = 0;
+    loop {
+        let rel = find_subslice(&haystack[pos..], keyword)?;
+        let line_start = pos + rel;
+        let at_line_start = line_start == 0
+            || haystack[line_start - 1] == b'\n'
+            || haystack[line_start - 1] == b'\r';
+        let after = line_start + keyword.len();
+        let at_word_end = after >= haystack.len()
+            || haystack[after] == b' '
+            || haystack[after] == b'\t'
+            || haystack[after] == b'\n'
+            || haystack[after] == b'\r';
+        if at_line_start && at_word_end {
+            return Some(line_start);
+        }
+        pos = line_start + 1;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -653,10 +680,10 @@ impl FileAdapter for PcdAdapter {
         let (data, path, prefix, depth, postprocess, config) = read_input!(ai);
         let text = (|| {
             // the PCD header is ASCII even in binary files; it ends with the
-            // DATA line, after which the payload begins
-            let data_line = find_subslice(&data, b"DATA ")
-                .or_else(|| find_subslice(&data, b"DATA\n"))
-                .or_else(|| find_subslice(&data, b"DATA\r"))
+            // DATA line, after which the payload begins. The keyword must be
+            // line-anchored: comments can contain the word, and a binary
+            // payload can contain the raw bytes "DATA ".
+            let data_line = find_line_keyword(&data, b"DATA")
                 .ok_or_else(|| anyhow::anyhow!("pcd: no DATA line in header"))?;
             let header = String::from_utf8_lossy(&data[..data_line]).into_owned();
             let mut fields = String::new();
@@ -760,7 +787,9 @@ impl GetMetadata for LasAdapter {
 }
 
 fn parse_las(data: &[u8]) -> Result<String> {
-    if data.len() < 243 || &data[0..4] != b"LASF" {
+    // the LAS public header is 227 bytes in every version (1.0-1.4);
+    // LAS 1.4 R&R appends an extended tail (375 bytes total)
+    if data.len() < 227 || &data[0..4] != b"LASF" {
         bail!("not a LAS file (bad magic or truncated header)");
     }
     let major = data[24];
@@ -774,11 +803,15 @@ fn parse_las(data: &[u8]) -> Result<String> {
     } else {
         legacy_count as u64
     };
+    // ASPRS LAS header layout (all little-endian f64):
+    //   X scale 131, Y scale 139, Z scale 147
+    //   X offset 155, Y offset 163, Z offset 171
+    //   max X 179, min X 187, max Y 195, min Y 203, max Z 211, min Z 219
     let get_f64 = |off: usize| f64::from_le_bytes(data[off..off + 8].try_into().unwrap());
     let (scale_x, scale_y, scale_z) = (get_f64(131), get_f64(139), get_f64(147));
-    let (max_x, min_x) = (get_f64(179), get_f64(191));
-    let (max_y, min_y) = (get_f64(203), get_f64(215));
-    let (max_z, min_z) = (get_f64(227), get_f64(235));
+    let (max_x, min_x) = (get_f64(179), get_f64(187));
+    let (max_y, min_y) = (get_f64(195), get_f64(203));
+    let (max_z, min_z) = (get_f64(211), get_f64(219));
     Ok(format!(
         "las_version: {major}.{minor}\npoint_format: {point_format}\nrecord_length: {record_len}\npoints: {count}\nscale: {scale_x} {scale_y} {scale_z}\nmin_x: {min_x}\nmax_x: {max_x}\nmin_y: {min_y}\nmax_y: {max_y}\nmin_z: {min_z}\nmax_z: {max_z}\n"
     ))
@@ -967,12 +1000,25 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn pcd_data_keyword_must_be_line_anchored() {
+        // "DATA " must not match inside a comment line or other text
+        let header = b"# .PCD v0.7\n# note: DATA fields follow\nVERSION 0.7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\nWIDTH 2\nHEIGHT 1\nPOINTS 2\nDATA binary\n";
+        let mut data = header.to_vec();
+        data.resize(header.len() + 2 * 12, 0);
+        let out = adapt_to_string(PcdAdapter, "scan.pcd", data).await.unwrap();
+        assert!(out.contains("fields: x y z"), "got {out}");
+        assert!(out.contains("points: 2"), "got {out}");
+        assert!(out.contains("data: binary"), "got {out}");
+    }
+
     // -----------------------------------------------------------------------
     // LAS / LAZ
     // -----------------------------------------------------------------------
 
     fn make_las() -> Vec<u8> {
-        let mut v = vec![0u8; 256];
+        // ASPRS layout: 227-byte public header (LAS 1.4 R&R tail is optional)
+        let mut v = vec![0u8; 227];
         v[0..4].copy_from_slice(b"LASF");
         v[24] = 1; // major
         v[25] = 4; // minor
@@ -980,12 +1026,15 @@ mod tests {
         v[104] = 6; // point data record format
         v[105..107].copy_from_slice(&30u16.to_le_bytes()); // record length
         v[107..111].copy_from_slice(&12345u32.to_le_bytes()); // point count
-        // scales at 131, offsets at 155, bounds at 179
+        // X scale @131; bounds: maxX 179, minX 187, maxY 195, minY 203,
+        // maxZ 211, minZ 219 (all little-endian f64)
         v[131..139].copy_from_slice(&0.001f64.to_le_bytes());
         v[179..187].copy_from_slice(&100.0f64.to_le_bytes()); // max x
-        v[191..199].copy_from_slice(&(-100.0f64).to_le_bytes()); // min x
-        v[227..235].copy_from_slice(&50.0f64.to_le_bytes()); // max z
-        v[235..243].copy_from_slice(&(-50.0f64).to_le_bytes()); // min z
+        v[187..195].copy_from_slice(&(-100.0f64).to_le_bytes()); // min x
+        v[195..203].copy_from_slice(&200.0f64.to_le_bytes()); // max y
+        v[203..211].copy_from_slice(&(-200.0f64).to_le_bytes()); // min y
+        v[211..219].copy_from_slice(&50.0f64.to_le_bytes()); // max z
+        v[219..227].copy_from_slice(&(-50.0f64).to_le_bytes()); // min z
         v
     }
 
@@ -995,8 +1044,17 @@ mod tests {
         assert!(out.contains("las_version: 1.4"), "got {out}");
         assert!(out.contains("point_format: 6"));
         assert!(out.contains("points: 12345"));
-        assert!(out.contains("min_x: -100"));
+        assert!(out.contains("min_x: -100"), "got {out}");
+        assert!(out.contains("max_y: 200"), "got {out}");
+        assert!(out.contains("min_z: -50"), "got {out}");
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn las_accepts_minimal_227_byte_header() {
+        // real LAS 1.0-1.3 files have exactly a 227-byte header
+        let out = adapt_to_string(LasAdapter, "legacy.las", make_las()).await;
+        assert!(out.is_ok(), "227-byte header must be accepted: {out:?}");
     }
 
     #[tokio::test]
