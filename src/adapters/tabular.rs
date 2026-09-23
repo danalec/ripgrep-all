@@ -20,7 +20,9 @@ lazy_static! {
     static ref DBF_META: AdapterMeta = AdapterMeta {
         name: "dbf".to_owned(),
         version: 1,
-        description: "Extracts the field descriptors and record rows (as TSV) from dBase/FoxPro DBF files".to_owned(),
+        description:
+            "Extracts the field descriptors and record rows (as TSV) from dBase/FoxPro DBF files"
+                .to_owned(),
         recurses: true,
         fast_matchers: vec![FastFileMatcher::FileExtension("dbf".to_string())],
         slow_matchers: None,
@@ -78,7 +80,9 @@ fn parse_dbf(data: &[u8]) -> Result<String> {
             .iter()
             .position(|b| *b == 0)
             .unwrap_or(raw_name.len());
-        let name = String::from_utf8_lossy(&raw_name[..name_end]).trim().to_string();
+        let name = String::from_utf8_lossy(&raw_name[..name_end])
+            .trim()
+            .to_string();
         if name.is_empty() {
             continue;
         }
@@ -115,7 +119,11 @@ fn parse_dbf(data: &[u8]) -> Result<String> {
     );
     out.push_str(&format!(
         "rows:\n{}\n",
-        fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join("\t")
+        fields
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect::<Vec<_>>()
+            .join("\t")
     ));
 
     let mut emitted = 0u32;
@@ -162,8 +170,7 @@ impl FileAdapter for DbfAdapter {
         } = ai;
         let mut data = Vec::new();
         inp.read_to_end(&mut data).await?;
-        let text = parse_dbf(&data)
-            .map_err(|e| adapter_bail(format!("dbf: {e}")))?;
+        let text = parse_dbf(&data).map_err(|e| adapter_bail(format!("dbf: {e}")))?;
         let mut out_path: PathBuf = filepath_hint;
         out_path.set_extension("txt");
         Ok(one_file(AdaptInfo {
@@ -188,10 +195,7 @@ mod tests {
 
     fn make_dbf(rows: &[(&str, &str)], deleted: bool) -> Vec<u8> {
         // two C(10) columns
-        let fields = [
-            (b"NAME".to_vec(), 10usize),
-            (b"CITY".to_vec(), 10usize),
-        ];
+        let fields = [(b"NAME".to_vec(), 10usize), (b"CITY".to_vec(), 10usize)];
         let header_size = 32 + fields.len() * 32 + 1;
         let record_size = 1 + fields.iter().map(|(_, l)| l).sum::<usize>();
         let mut v = vec![0u8; 32];
@@ -229,7 +233,9 @@ mod tests {
             Box::pin(Cursor::new(data)),
         );
         let out = DbfAdapter.adapt(a, &d).await?;
-        let text = String::from_utf8(adapted_to_vec(out).await?)?.trim().to_string();
+        let text = String::from_utf8(adapted_to_vec(out).await?)?
+            .trim()
+            .to_string();
         assert_eq!(
             text,
             "dbf_version: 0x3\nrecords: 2\nfields: NAME C(10), CITY C(10)\nrows:\nNAME\tCITY\nalice\tlyon\nbob\tnantes"
@@ -245,7 +251,9 @@ mod tests {
             Box::pin(Cursor::new(data)),
         );
         let out = DbfAdapter.adapt(a, &d).await?;
-        let text = String::from_utf8(adapted_to_vec(out).await?)?.trim().to_string();
+        let text = String::from_utf8(adapted_to_vec(out).await?)?
+            .trim()
+            .to_string();
         assert!(!text.contains("alice"), "deleted row leaked: {text}");
         assert!(text.contains("bob\tnantes"), "got {text}");
         Ok(())
@@ -258,6 +266,11 @@ mod tests {
             Box::pin(Cursor::new(vec![0u8; 100])),
         );
         let res = DbfAdapter.adapt(a, &d).await;
-        assert!(res.err().expect("should bail").downcast_ref::<AdapterBail>().is_some());
+        assert!(
+            res.err()
+                .expect("should bail")
+                .downcast_ref::<AdapterBail>()
+                .is_some()
+        );
     }
 }
