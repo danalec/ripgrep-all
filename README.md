@@ -194,6 +194,9 @@ Adapters:
 - **fits**
   Extracts the header cards (target, instrument, exposure, WCS) from FITS astronomy/scientific image files  
    Extensions: .fits, .fit, .fts
+- **parquet**
+  Extracts the row count and column schema (names, types, repetition, nesting) from the Parquet file footer  
+   Extensions: .parquet
 
 The following adapters are disabled by default, and can be enabled using '--rga-adapters=+foo,bar':
 
